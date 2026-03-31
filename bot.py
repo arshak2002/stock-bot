@@ -358,10 +358,11 @@ def _no_trade(data, reason):
 
 def run_screener_job():
     """Runs screener.py script via subprocess to update watchlist.json"""
+    import sys
     base_dir = os.path.dirname(os.path.abspath(__file__))
     screener_path = os.path.join(base_dir, "screener.py")
     try:
-        subprocess.run(["python3", screener_path], check=True)
+        subprocess.run([sys.executable, screener_path], check=True)
         print("[*] Screener completed. Watchlist updated.")
     except Exception as e:
         print(f"[ERROR] Screener execution failed: {e}")

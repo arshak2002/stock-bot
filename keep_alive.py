@@ -13,7 +13,12 @@ def home():
 
 def run():
     # Run the server quietly on standard web port 8080
-    app.run(host='0.0.0.0', port=8080)
+    try:
+        import os
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        print(f"[*] Keep-alive webserver couldn't start (Local run): {e}")
 
 def keep_alive():
     """
