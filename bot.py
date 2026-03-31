@@ -160,7 +160,8 @@ class IntradayBot:
                 msg = "🛑 *Market Closed*\nToday is a weekend or public holiday. Bot shutting down."
                 print(f"[!] {msg}")
                 TelegramAlerter.send(msg, "STARTUP", cfg)
-                return
+                while True:
+                    time.sleep(3600) # Keep server alive unconditionally for UptimeRobot
             TelegramAlerter.send("✅ *Bot V5.0 Online*\nPipeline initialized. Awaiting market open...", "STARTUP", cfg)
         except Exception:
             pass
