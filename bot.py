@@ -359,6 +359,11 @@ def _no_trade(data, reason):
 
 def run_screener_job():
     """Runs screener.py script via subprocess to update watchlist.json"""
+    from execution import SessionFilter
+    if SessionFilter.is_holiday():
+        print("[!] 🛑 Market Closed. Skipping screener run.")
+        return
+        
     import sys
     base_dir = os.path.dirname(os.path.abspath(__file__))
     screener_path = os.path.join(base_dir, "screener.py")
@@ -392,8 +397,11 @@ if __name__ == "__main__":
     
     watchlist = get_watchlist()
     
+    from execution import SessionFilter
+    is_holiday = SessionFilter.is_holiday()
+
     # If no fresh watchlist exists, automatically run screener now
-    if not watchlist:
+    if not watchlist and not is_holiday:
         print("[*] No valid watchlist found. Running screener now...")
         run_screener_job()
         watchlist = get_watchlist()
@@ -402,8 +410,12 @@ if __name__ == "__main__":
         print(f"Auto-loaded watchlist: {watchlist}")
         symbols = watchlist
     else:
-        print("[!] Screener returned no stocks. Defaulting to NIFTY50 leaders.")
-        symbols = ["RELIANCE.NS", "HDFCBANK.NS"]
+        if is_holiday:
+            symbols = ["RELIANCE.NS"]
+            print("[*] Market Closed. Standing by with default symbol.")
+        else:
+            print("[!] Screener returned no stocks. Defaulting to NIFTY50 leaders.")
+            symbols = ["RELIANCE.NS", "HDFCBANK.NS"]
 
     bot = IntradayBot(symbols)
     bot.run()
