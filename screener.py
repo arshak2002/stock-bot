@@ -7,8 +7,12 @@ Outputs to watchlist.json
 """
 
 import os
-import json
 import time
+import json
+
+if hasattr(time, 'tzset'):
+    os.environ['TZ'] = 'Asia/Kolkata'
+    time.tzset()
 from datetime import datetime
 from typing import Dict, List, Any
 

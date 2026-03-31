@@ -11,6 +11,12 @@ import os
 import time
 import json
 import schedule
+
+# Force structural execution environment identically to IST for cloud containers
+if hasattr(time, 'tzset'):
+    os.environ['TZ'] = 'Asia/Kolkata'
+    time.tzset()
+
 from datetime import datetime
 import subprocess
 import yfinance as yf
