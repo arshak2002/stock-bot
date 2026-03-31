@@ -157,18 +157,23 @@ class IntradayBot:
         # Startup Diagnostic Alert
         try:
             if SessionFilter.is_holiday():
-                msg = "🛑 *Market Closed*\nToday is a weekend or public holiday. Bot shutting down."
+                msg = "🛑 *Market Closed*\nToday is a weekend or public holiday. Bot standing by..."
                 print(f"[!] {msg}")
                 TelegramAlerter.send(msg, "STARTUP", cfg)
-                while True:
-                    time.sleep(3600) # Keep server alive unconditionally for UptimeRobot
-            TelegramAlerter.send("✅ *Bot V5.0 Online*\nPipeline initialized. Awaiting market open...", "STARTUP", cfg)
+            else:
+                TelegramAlerter.send("✅ *Bot V5.0 Online*\nPipeline initialized. Awaiting market open...", "STARTUP", cfg)
         except Exception:
             pass
 
         try:
             while True:
                 schedule.run_pending()
+                
+                # If it is currently a holiday, sleep for 1 hour then re-check (allows seamless next-day crossover)
+                if SessionFilter.is_holiday():
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Holiday resting mode. Interrogating again in 1 hour...")
+                    time.sleep(3600)
+                    continue
                 
                 # Hot-reload config
                 self.cfg = load_config()
