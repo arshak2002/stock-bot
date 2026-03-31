@@ -1,0 +1,18 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+docker.venv
+
+TECHNICAL_REFERENCE.md
+PROJECT_DETAILS.md
+FEATURES.md
+
+# Dynamic Files
+*.csv
+*.json
+__pycache__/

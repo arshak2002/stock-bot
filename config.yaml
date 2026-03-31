@@ -1,0 +1,140 @@
+# ═══════════════════════════════════════════════
+#  config.yaml — V5.0 Central Configuration
+#  All magic numbers in one place. Hot-reloaded.
+# ═══════════════════════════════════════════════
+
+# ── Account ──
+account:
+  capital: 100000          # ₹ starting capital
+  risk_per_trade_pct: 1.0  # % of capital risked per trade
+  max_risk_pct: 1.5        # hard cap on risk %
+  max_position_pct: 5.0    # max single position as % of capital
+  max_kelly_fraction: 0.25 # cap Kelly to prevent overbetting
+
+# ── Session ──
+session:
+  safe_open: "09:20"
+  safe_close: "14:45"
+  no_reversal_before: "09:45"
+  max_trades_per_day: 6    # total, not per side
+  poll_interval_sec: 10
+
+# ── Scoring ──
+scoring:
+  # Time-of-day adaptive thresholds
+  min_score_orb_window: 7        # 9:30–10:00 AM
+  min_score_morning: 7           # 10:00–12:00
+  min_score_afternoon: 8         # 12:00–2:30
+  grade_a_plus: 9
+  grade_a: 7
+  
+  min_score: 6             # lowered: 6/11 = balanced quality vs frequency
+  move_threshold_pct: 0.7  # lowered: 0.7% move from open is enough
+  vwap_proximity_pct: 1.5        # widened: within 1.5% of VWAP counts
+  cpr_proximity_pct: 0.75        # was 0.3 — this was the main culprit
+  rsi_oversold: 45         # relaxed RSI bands
+  rsi_overbought: 55
+  volume_spike_ratio: 1.2  # lowered: 1.2x avg volume is enough
+  adx_trending: 18         # lowered: catch weaker trends too
+  # Weights
+  weight_move: 1
+  weight_vwap: 1
+  weight_candle: 1
+  weight_rsi: 1
+  weight_volume: 2         # highest confirmation value
+  weight_supertrend: 2     # strongest trend filter
+  weight_macd: 0.5         # laggy on intraday, reduced
+  weight_bollinger: 1
+  weight_adx: 1
+  weight_orb: 1            # only if vol > 2× 5-day avg
+
+# ── Indicators ──
+indicators:
+  rsi_period: 14
+  ema_fast: 9
+  ema_slow: 21
+  atr_period: 14
+  supertrend_period: 10
+  supertrend_multiplier: 3.0
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  bollinger_period: 20
+  bollinger_std: 2.0
+  adx_period: 14
+  adx_orb_min: 25
+  adx_orb_strong: 30
+  adx_reversal_max: 18
+  adx_reversal_partial: 22
+
+# ── ATR-based SL/Target ──
+risk_management:
+  sl_atr_multiplier: 1.2
+  target_atr_multiplier: 2.0
+  fixed_target_pct: 1.0        # Force 1.0% profit target per trade
+  true_edge_min_pct: 0.10        # was 0.25 — too strict for large-caps
+  true_edge_min_midcap: 0.15     # new: separate threshold for mid-caps
+  trailing_breakeven_pct: 0.5
+  trailing_lock_1_pct: 0.75
+  trailing_lock_2_pct: 1.0
+
+# ── Circuit Breaker ──
+circuit_breaker:
+  daily_loss_limit_pct: -2.0
+  daily_gain_lock_pct: 1.5
+  drawdown_from_peak_pct: 1.5
+
+# ── Loss Streak ──
+loss_streak:
+  max_consecutive: 2
+
+# ── Slippage Model ──
+slippage:
+  large_cap_pct: 0.05      # Nifty50
+  mid_cap_pct: 0.15
+  small_cap_pct: 0.30
+  min_true_edge_pct: 0.25  # signal must exceed this after costs
+
+# ── Market Regime ──
+regime:
+  strong_trend_adx: 30
+  weak_trend_adx_min: 20
+  weak_trend_adx_max: 30
+  range_adx: 20
+  vwap_strong_dist_pct: 0.5
+  vwap_range_dist_pct: 0.3
+  bb_strong_bw: 2.0
+  bb_weak_bw_min: 1.0
+  bb_weak_bw_max: 2.0
+  bb_range_bw: 1.0
+  min_confidence: 40       # lowered: allow trades in less certain regimes
+
+# ── Liquidity Sweep ──
+liquidity:
+  wick_atr_threshold: 0.4
+  sweep_volume_ratio: 1.5
+  re_entry_wait_candles: 2
+
+# ── Correlation Guard ──
+correlation:
+  max_correlation: 0.7
+  lookback_days: 20
+
+# ── News Filter ──
+news:
+  enabled: true
+  cache_ttl_minutes: 15
+  block_on_failure: false  # don't block trades just because RSS feed timed out
+
+# ── Telegram ──
+telegram:
+  enabled: true
+  bot_token: "8605867676:AAFV3xfA5OkoJ2ZtGDGyE8tuFT-gHlrbf1Y"            # Get from @BotFather
+  chat_id: "924804069"              # Your chat ID
+  throttle_seconds: 300    # 1 alert per symbol per 5 min
+
+# ── Backtesting ──
+backtest:
+  default_days: 90
+  min_sharpe: 1.0
+  max_drawdown_pct: 8.0
