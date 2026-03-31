@@ -389,11 +389,19 @@ if __name__ == "__main__":
     schedule.every().day.at("09:00").do(run_screener_job)
     
     watchlist = get_watchlist()
+    
+    # If no fresh watchlist exists, automatically run screener now
+    if not watchlist:
+        print("[*] No valid watchlist found. Running screener now...")
+        run_screener_job()
+        watchlist = get_watchlist()
+
     if watchlist:
         print(f"Auto-loaded watchlist: {watchlist}")
         symbols = watchlist
     else:
-        symbols = [input("Enter NSE symbol: ").upper().strip() or "RELIANCE"]
+        print("[!] Screener returned no stocks. Defaulting to NIFTY50 leaders.")
+        symbols = ["RELIANCE.NS", "HDFCBANK.NS"]
 
     bot = IntradayBot(symbols)
     bot.run()
