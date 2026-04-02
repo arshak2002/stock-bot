@@ -25,6 +25,8 @@ import pandas as pd
 from execution import (
     load_config, YFinanceProvider, SessionFilter, NewsFilter,
     SlippageModel, TradeLogger, TelegramAlerter, play_alert,
+    fetch_sector_strength, get_sector_score_bonus,
+    fetch_fii_dii_data, fetch_india_vix, get_vix_adjusted_params,
 )
 from strategy import (
     MarketRegime, OpeningRangeBreakout, LiquiditySweepFilter,
@@ -32,8 +34,14 @@ from strategy import (
 )
 from risk import (
     LossStreakProtection, CircuitBreaker, PositionSizer, ExpectancyTracker,
+    TrancheManager,
 )
-from indicators import adx as compute_adx, ema as compute_ema
+from indicators import (
+    adx as compute_adx, ema as compute_ema,
+    detect_candle_patterns, calculate_intraday_sr,
+    calculate_volume_profile, classify_gap,
+    calculate_order_flow_imbalance,
+)
 
 
 class IntradayBot:
@@ -54,9 +62,19 @@ class IntradayBot:
         self.pos_sizer   = PositionSizer()
 
         self.trade_count = {"BUY": 0, "SELL": 0}
+        self.active_tranches = {}   # V5.2: symbol -> TrancheManager
         
         # Schedule morning brief
         schedule.every().day.at("09:14").do(self.send_morning_brief)
+        # V5.2: Refresh sector strength every 30 minutes
+        schedule.every(30).minutes.do(self._refresh_sector_strength)
+
+    @staticmethod
+    def _refresh_sector_strength():
+        try:
+            fetch_sector_strength()
+        except Exception:
+            pass
 
     def reload_symbols(self, new_symbols: list):
         """Dynamically hot-swaps active universe without breaking PnL or circuit state."""
@@ -210,7 +228,6 @@ class IntradayBot:
                     # ── 1. Fetch ──
                     data = self.providers[sym].fetch(cfg)
                     if data is None:
-                        # try next symbol rather than sleeping
                         continue
 
                     df_1m = data.pop("df_1m", None)
@@ -225,6 +242,36 @@ class IntradayBot:
                     # ── 4. Liquidity Sweep ──
                     atr_val = data.get("atr") or 0
                     liquidity = LiquiditySweepFilter.detect(df_1m, data["current_price"], atr_val, cfg)
+
+                    # ── V5.2: Compute new indicators ──
+                    try:
+                        data["candle_patterns"] = detect_candle_patterns(df_1m, atr_val) if df_1m is not None and atr_val else {}
+                        data["intraday_sr"] = calculate_intraday_sr(df_1m) if df_1m is not None else {}
+                        data["vpoc"] = calculate_volume_profile(df_1m) if df_1m is not None else {}
+                        data["ofi"] = calculate_order_flow_imbalance(df_1m) if df_1m is not None else {}
+                        data["fii_dii"] = fetch_fii_dii_data()
+                        data["india_vix"] = fetch_india_vix()
+                        # Gap classification (computed once per symbol per day)
+                        if df_1m is not None and len(df_1m) > 5:
+                            data["gap_classification"] = classify_gap(
+                                today_open=data.get("open_price", 0),
+                                prev_close=data.get("prev_close", data.get("open_price", 0)),
+                                prev_high=data.get("prev_high", data.get("high", 0)),
+                                prev_low=data.get("prev_low", data.get("low", 0)),
+                                avg_volume_today=float(df_1m["Volume"].mean()) if not df_1m.empty else 0,
+                                avg_volume_5day=float(df_1m["Volume"].mean()),
+                                atr_val=atr_val,
+                            )
+                        else:
+                            data["gap_classification"] = {}
+                    except Exception as e:
+                        data.setdefault("candle_patterns", {})
+                        data.setdefault("intraday_sr", {})
+                        data.setdefault("vpoc", {})
+                        data.setdefault("ofi", {})
+                        data.setdefault("fii_dii", {})
+                        data.setdefault("india_vix", 15.0)
+                        data.setdefault("gap_classification", {})
 
                     # ── 5. Circuit Breaker ──
                     if not self.circuit.is_allowed():

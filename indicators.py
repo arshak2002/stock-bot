@@ -298,3 +298,265 @@ def pivot_points(prev_high: float, prev_low: float, prev_close: float) -> Dict[s
         "r1": round(r1, 2), "r2": round(r2, 2), "r3": round(r3, 2),
         "s1": round(s1, 2), "s2": round(s2, 2), "s3": round(s3, 2),
     }
+
+
+# ───────────────────────────────────────
+#  V5.2 — CANDLESTICK PATTERN ENGINE
+# ───────────────────────────────────────
+
+def detect_candle_patterns(df: pd.DataFrame, atr_val: float) -> dict:
+    """
+    Detects 8 high-probability patterns on the last 2 candles.
+    All patterns are normalized by ATR to avoid false signals
+    on low-volatility candles.
+    """
+    if df is None or len(df) < 2 or atr_val is None or atr_val <= 0:
+        return {}
+
+    o  = float(df["Open"].iloc[-1])
+    h  = float(df["High"].iloc[-1])
+    l  = float(df["Low"].iloc[-1])
+    c  = float(df["Close"].iloc[-1])
+    po = float(df["Open"].iloc[-2])
+    ph = float(df["High"].iloc[-2])
+    pl = float(df["Low"].iloc[-2])
+    pc = float(df["Close"].iloc[-2])
+
+    body       = abs(c - o)
+    upper_wick = h - max(c, o)
+    lower_wick = min(c, o) - l
+    prev_body  = abs(pc - po)
+
+    patterns = {}
+
+    # 1. HAMMER — bullish reversal
+    if (body > 0 and lower_wick >= 2.0 * body and
+        upper_wick <= 0.3 * body and body >= 0.1 * atr_val):
+        patterns["HAMMER"] = "BULLISH"
+
+    # 2. SHOOTING STAR — bearish reversal
+    if (body > 0 and upper_wick >= 2.0 * body and
+        lower_wick <= 0.3 * body and body >= 0.1 * atr_val):
+        patterns["SHOOTING_STAR"] = "BEARISH"
+
+    # 3. BULLISH ENGULFING
+    if (c > o and pc > po and
+        o <= pc and c >= po and
+        prev_body > 0 and body >= prev_body * 1.1):
+        patterns["BULLISH_ENGULFING"] = "BULLISH"
+
+    # 4. BEARISH ENGULFING
+    if (c < o and pc < po and
+        o >= pc and c <= po and
+        prev_body > 0 and body >= prev_body * 1.1):
+        patterns["BEARISH_ENGULFING"] = "BEARISH"
+
+    # 5. DOJI — indecision
+    total_range = h - l
+    if total_range > 0 and body / total_range < 0.10:
+        patterns["DOJI"] = "NEUTRAL"
+
+    # 6. PIN BAR (bullish)
+    if (body > 0 and lower_wick >= 3.0 * body and
+        (h - l) > 0 and (c - l) / (h - l) >= 0.60):
+        patterns["PIN_BAR_BULL"] = "BULLISH"
+
+    # 7. PIN BAR (bearish)
+    if (body > 0 and upper_wick >= 3.0 * body and
+        (h - l) > 0 and (h - c) / (h - l) >= 0.60):
+        patterns["PIN_BAR_BEAR"] = "BEARISH"
+
+    # 8. INSIDE BAR — compression before breakout
+    if h < ph and l > pl:
+        patterns["INSIDE_BAR"] = "NEUTRAL"
+
+    return patterns
+
+
+# ───────────────────────────────────────
+#  V5.2 — INTRADAY SUPPORT/RESISTANCE
+# ───────────────────────────────────────
+
+def calculate_intraday_sr(df: pd.DataFrame, lookback_candles: int = 20) -> dict:
+    """
+    Detects today's intraday S/R levels by finding swing highs/lows.
+    A swing high = local max with 2 lower highs on each side.
+    Returns the nearest S/R levels relative to current price.
+    """
+    result = {"resistance_1": None, "resistance_2": None,
+              "support_1": None, "support_2": None}
+
+    if df is None or len(df) < lookback_candles or lookback_candles < 5:
+        return result
+
+    highs = df["High"].iloc[-lookback_candles:]
+    lows  = df["Low"].iloc[-lookback_candles:]
+
+    swing_highs = []
+    swing_lows  = []
+
+    for i in range(2, len(highs) - 2):
+        if (highs.iloc[i] > highs.iloc[i-1] and
+            highs.iloc[i] > highs.iloc[i-2] and
+            highs.iloc[i] > highs.iloc[i+1] and
+            highs.iloc[i] > highs.iloc[i+2]):
+            swing_highs.append(float(highs.iloc[i]))
+
+        if (lows.iloc[i] < lows.iloc[i-1] and
+            lows.iloc[i] < lows.iloc[i-2] and
+            lows.iloc[i] < lows.iloc[i+1] and
+            lows.iloc[i] < lows.iloc[i+2]):
+            swing_lows.append(float(lows.iloc[i]))
+
+    current_price = float(df["Close"].iloc[-1])
+    resistances = sorted([h for h in swing_highs if h > current_price])
+    supports    = sorted([s for s in swing_lows if s < current_price], reverse=True)
+
+    result["resistance_1"] = resistances[0] if len(resistances) > 0 else None
+    result["resistance_2"] = resistances[1] if len(resistances) > 1 else None
+    result["support_1"]    = supports[0]    if len(supports)    > 0 else None
+    result["support_2"]    = supports[1]    if len(supports)    > 1 else None
+    return result
+
+
+# ───────────────────────────────────────
+#  V5.2 — VOLUME PROFILE (VPOC)
+# ───────────────────────────────────────
+
+def calculate_volume_profile(df: pd.DataFrame, price_bins: int = 50) -> dict:
+    """
+    Builds intraday volume profile. Divides price range into N bins.
+    Returns VPOC (price with highest volume) and Value Area boundaries.
+    """
+    if df is None or df.empty or len(df) < 5:
+        return {"vpoc": None, "va_high": None, "va_low": None}
+
+    price_min = float(df["Low"].min())
+    price_max = float(df["High"].max())
+
+    if price_max == price_min:
+        return {"vpoc": float(df["Close"].iloc[-1]),
+                "va_high": price_max, "va_low": price_min}
+
+    bin_size = (price_max - price_min) / price_bins
+    bins     = {}
+
+    for _, row in df.iterrows():
+        candle_low  = float(row["Low"])
+        candle_high = float(row["High"])
+        candle_vol  = float(row["Volume"])
+        candle_bins = max(1, int((candle_high - candle_low) / bin_size))
+        vol_per_bin = candle_vol / candle_bins
+
+        for b in range(candle_bins):
+            price_level = round(candle_low + b * bin_size, 2)
+            bins[price_level] = bins.get(price_level, 0) + vol_per_bin
+
+    if not bins:
+        return {"vpoc": float(df["Close"].iloc[-1]), "va_high": None, "va_low": None}
+
+    vpoc = max(bins, key=bins.get)
+
+    # Value Area: price range containing 70% of total volume
+    total_vol  = sum(bins.values())
+    target_vol = total_vol * 0.70
+    sorted_bins = sorted(bins.items(), key=lambda x: x[1], reverse=True)
+
+    va_levels   = []
+    accumulated = 0
+    for price_level, vol in sorted_bins:
+        accumulated += vol
+        va_levels.append(price_level)
+        if accumulated >= target_vol:
+            break
+
+    return {
+        "vpoc":    round(vpoc, 2),
+        "va_high": round(max(va_levels), 2) if va_levels else None,
+        "va_low":  round(min(va_levels), 2) if va_levels else None,
+    }
+
+
+# ───────────────────────────────────────
+#  V5.2 — GAP CLASSIFICATION ENGINE
+# ───────────────────────────────────────
+
+def classify_gap(today_open: float, prev_close: float,
+                 prev_high: float, prev_low: float,
+                 avg_volume_today: float, avg_volume_5day: float,
+                 atr_val: float) -> dict:
+    """
+    Classifies the opening gap into one of 4 types.
+    Each type implies a different trading strategy.
+    """
+    if prev_close == 0 or atr_val is None or atr_val <= 0:
+        return {"gap_type": "FLAT", "gap_pct": 0, "direction": "FLAT",
+                "gap_size_atr": 0, "volume_ratio": 1.0, "strategy_hint": "ORB_BOTH"}
+
+    gap_pct = (today_open - prev_close) / prev_close * 100
+    volume_ratio = avg_volume_today / avg_volume_5day if avg_volume_5day > 0 else 1.0
+    direction = "UP" if gap_pct > 0.1 else ("DOWN" if gap_pct < -0.1 else "FLAT")
+    gap_size_atr = abs(today_open - prev_close) / atr_val
+
+    if abs(gap_pct) < 0.3:
+        gap_type = "FLAT"
+        strategy_hint = "ORB_BOTH"
+    elif gap_size_atr > 2.0 and volume_ratio > 2.0:
+        gap_type = "BREAKAWAY"
+        strategy_hint = f"ORB_{direction}"
+    elif gap_size_atr > 1.5 and volume_ratio < 1.2:
+        gap_type = "EXHAUSTION"
+        strategy_hint = f"REVERSAL_{'LONG' if direction == 'DOWN' else 'SHORT'}"
+    elif 0.5 < gap_size_atr <= 2.0 and volume_ratio > 1.5:
+        gap_type = "CONTINUATION"
+        strategy_hint = f"ORB_{direction}"
+    else:
+        gap_type = "COMMON"
+        strategy_hint = "WAIT_OR_ORB"
+
+    return {
+        "gap_type":      gap_type,
+        "gap_pct":       round(gap_pct, 2),
+        "direction":     direction,
+        "gap_size_atr":  round(gap_size_atr, 2),
+        "volume_ratio":  round(volume_ratio, 2),
+        "strategy_hint": strategy_hint,
+    }
+
+
+# ───────────────────────────────────────
+#  V5.2 — ORDER FLOW IMBALANCE (OFI)
+# ───────────────────────────────────────
+
+def calculate_order_flow_imbalance(df: pd.DataFrame, lookback: int = 3) -> dict:
+    """
+    Measures buying/selling pressure from candle close position.
+    OFI = (Close - Low) / (High - Low)
+    OFI = 1.0 → close at high (max buying pressure)
+    OFI = 0.0 → close at low (max selling pressure)
+    """
+    if df is None or len(df) < lookback + 1:
+        return {"current_ofi": 0.5, "avg_ofi": 0.5, "ofi_trend": 0.0,
+                "buyers_in_control": False, "sellers_in_control": False, "neutral": True}
+
+    results = []
+    for i in range(-lookback, 0):
+        h = float(df["High"].iloc[i])
+        l = float(df["Low"].iloc[i])
+        c = float(df["Close"].iloc[i])
+        rng = h - l
+        ofi = (c - l) / rng if rng > 0 else 0.5
+        results.append(ofi)
+
+    current_ofi = results[-1]
+    avg_ofi     = sum(results) / len(results)
+    ofi_trend   = results[-1] - results[0]
+
+    return {
+        "current_ofi":        round(current_ofi, 3),
+        "avg_ofi":            round(avg_ofi, 3),
+        "ofi_trend":          round(ofi_trend, 3),
+        "buyers_in_control":  current_ofi > 0.65,
+        "sellers_in_control": current_ofi < 0.35,
+        "neutral":            0.35 <= current_ofi <= 0.65,
+    }

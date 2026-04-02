@@ -55,7 +55,7 @@ def load_config(path: str = None) -> Dict[str, Any]:
 
 class SessionFilter:
     NSE_HOLIDAYS_STR = {
-        "2026-01-26", "2026-03-03", "2026-03-20", "2026-03-31", "2026-04-02", "2026-04-03", "2026-04-14",
+        "2026-01-26", "2026-03-03", "2026-03-20", "2026-03-31", "2026-04-03", "2026-04-14",
         "2026-05-01", "2026-08-15", "2026-10-02", "2026-11-09", "2026-11-24", "2026-12-25"
     }
 
@@ -659,3 +659,218 @@ def play_alert():
         )
     except Exception:
         pass
+
+
+# ══════════════════════════════════════════════
+#  V5.2 — SECTOR ROTATION FILTER
+# ══════════════════════════════════════════════
+
+SECTOR_INDEX_MAP = {
+    "IT":      "^CNXIT",
+    "BANK":    "^NSEBANK",
+    "AUTO":    "^CNXAUTO",
+    "PHARMA":  "^CNXPHARMA",
+    "METAL":   "^CNXMETAL",
+    "ENERGY":  "^CNXENERGY",
+    "FMCG":    "^CNXFMCG",
+    "REALTY":  "^CNXREALTY",
+}
+
+STOCK_SECTOR_MAP = {
+    "TCS": "IT", "INFY": "IT", "WIPRO": "IT", "HCLTECH": "IT",
+    "TECHM": "IT", "LTIM": "IT",
+    "HDFCBANK": "BANK", "ICICIBANK": "BANK", "SBIN": "BANK",
+    "KOTAKBANK": "BANK", "AXISBANK": "BANK", "INDUSINDBK": "BANK",
+    "MARUTI": "AUTO", "TATAMOTORS": "AUTO", "M&M": "AUTO",
+    "EICHERMOT": "AUTO", "HEROMOTOCO": "AUTO", "BAJAJ-AUTO": "AUTO",
+    "SUNPHARMA": "PHARMA", "DRREDDY": "PHARMA", "CIPLA": "PHARMA",
+    "DIVISLAB": "PHARMA", "APOLLOHOSP": "PHARMA",
+    "TATASTEEL": "METAL", "JSWSTEEL": "METAL", "HINDALCO": "METAL",
+    "COALINDIA": "METAL", "ONGC": "ENERGY", "BPCL": "ENERGY",
+    "NTPC": "ENERGY", "TATAPOWER": "ENERGY",
+    "HINDUNILVR": "FMCG", "ITC": "FMCG", "NESTLEIND": "FMCG",
+    "BRITANNIA": "FMCG", "TATACONSUM": "FMCG",
+    "RELIANCE": "ENERGY", "ADANIPORTS": "ENERGY",
+}
+
+_sector_strength_cache = {}
+
+def fetch_sector_strength() -> dict:
+    """
+    Calculates today's intraday return for each sector index.
+    Returns sector -> strength label.
+    """
+    global _sector_strength_cache
+    strengths = {}
+
+    for sector, ticker in SECTOR_INDEX_MAP.items():
+        try:
+            import yfinance as yf
+            data = yf.download(ticker, period="1d", interval="5m", progress=False)
+            if data.empty:
+                strengths[sector] = "NEUTRAL"
+                continue
+            open_col = data["Open"]
+            if isinstance(open_col, pd.DataFrame):
+                open_col = open_col.iloc[:, 0]
+            close_col = data["Close"]
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]
+            open_price = float(open_col.iloc[0])
+            last_price = float(close_col.iloc[-1])
+            change_pct = (last_price - open_price) / open_price * 100
+
+            if change_pct > 0.5:
+                strengths[sector] = "STRONG_BULL"
+            elif change_pct > 0.2:
+                strengths[sector] = "MILD_BULL"
+            elif change_pct < -0.5:
+                strengths[sector] = "STRONG_BEAR"
+            elif change_pct < -0.2:
+                strengths[sector] = "MILD_BEAR"
+            else:
+                strengths[sector] = "NEUTRAL"
+        except Exception:
+            strengths[sector] = "NEUTRAL"
+
+    _sector_strength_cache = strengths
+    return strengths
+
+
+def get_sector_score_bonus(symbol: str, strategy_type: str) -> float:
+    """
+    Returns a scoring bonus based on sector momentum alignment.
+    """
+    clean = symbol.replace(".NS", "").replace(".BO", "").upper()
+    sector = STOCK_SECTOR_MAP.get(clean)
+    if not sector:
+        return 0.0
+
+    strength = _sector_strength_cache.get(sector, "NEUTRAL")
+
+    if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+        return {"STRONG_BULL": 0.5, "MILD_BULL": 0.25,
+                "NEUTRAL": 0.0, "MILD_BEAR": -0.25,
+                "STRONG_BEAR": -0.5}.get(strength, 0.0)
+
+    elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+        return {"STRONG_BEAR": 0.5, "MILD_BEAR": 0.25,
+                "NEUTRAL": 0.0, "MILD_BULL": -0.25,
+                "STRONG_BULL": -0.5}.get(strength, 0.0)
+
+    return 0.0
+
+
+# ══════════════════════════════════════════════
+#  V5.2 — FII/DII FLOW FILTER
+# ══════════════════════════════════════════════
+
+_fii_dii_cache = {"data": None, "fetched_at": None}
+
+def fetch_fii_dii_data() -> dict:
+    """
+    Fetches FII and DII provisional trading data from NSE.
+    Returns net flows and directional bias.
+    """
+    global _fii_dii_cache
+
+    if _fii_dii_cache["fetched_at"]:
+        age = (datetime.now() - _fii_dii_cache["fetched_at"]).seconds
+        if age < 3600 and _fii_dii_cache["data"]:
+            return _fii_dii_cache["data"]
+
+    try:
+        session = requests.Session()
+        session.get("https://www.nseindia.com",
+                    headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+
+        url  = "https://www.nseindia.com/api/fiidiiTradeReact"
+        resp = session.get(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer":    "https://www.nseindia.com",
+            "Accept":     "application/json",
+        }, timeout=8)
+
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            raise ValueError("Invalid FII/DII response")
+
+        today = data[0]
+        fii_net = float(today.get("fii_index_stats", {}).get("netAmount", 0))
+        dii_net = float(today.get("dii_index_stats", {}).get("netAmount", 0))
+        combined = fii_net + dii_net
+
+        if fii_net < -2000:
+            bias = "BEARISH"
+        elif fii_net > 2000:
+            bias = "BULLISH"
+        elif combined < -1000:
+            bias = "BEARISH"
+        elif combined > 1000:
+            bias = "BULLISH"
+        else:
+            bias = "NEUTRAL"
+
+        result = {"fii_net": fii_net, "dii_net": dii_net,
+                  "combined": combined, "bias": bias}
+        _fii_dii_cache = {"data": result, "fetched_at": datetime.now()}
+        return result
+
+    except Exception as e:
+        print(f"[FII/DII] Fetch failed: {e} — neutral bias")
+        return {"fii_net": 0, "dii_net": 0,
+                "combined": 0, "bias": "NEUTRAL"}
+
+
+# ══════════════════════════════════════════════
+#  V5.2 — INDIA VIX ADAPTIVE SIZING
+# ══════════════════════════════════════════════
+
+_vix_cache = {"value": 15.0, "fetched_at": None}
+
+def fetch_india_vix() -> float:
+    """
+    Fetches India VIX — 30-day implied volatility of Nifty options.
+    """
+    global _vix_cache
+
+    if _vix_cache["fetched_at"]:
+        age = (datetime.now() - _vix_cache["fetched_at"]).seconds
+        if age < 1800 and _vix_cache["value"]:
+            return _vix_cache["value"]
+
+    try:
+        session = requests.Session()
+        session.get("https://www.nseindia.com",
+                    headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        url  = "https://www.nseindia.com/api/allIndices"
+        resp = session.get(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer":    "https://www.nseindia.com",
+        }, timeout=8)
+        indices = resp.json()["data"]
+        vix_row = next((i for i in indices
+                        if i.get("index") == "INDIA VIX"), None)
+        vix = float(vix_row["last"]) if vix_row else 15.0
+        _vix_cache = {"value": vix, "fetched_at": datetime.now()}
+        return vix
+    except Exception:
+        return _vix_cache.get("value", 15.0)
+
+
+def get_vix_adjusted_params(vix: float) -> dict:
+    """
+    Returns ATR multiplier and size multiplier based on VIX regime.
+    """
+    if vix < 13:
+        return {"sl_atr_mult": 1.0, "target_atr_mult": 1.8,
+                "size_mult": 1.1,  "label": "LOW_VOL"}
+    elif vix < 18:
+        return {"sl_atr_mult": 1.2, "target_atr_mult": 2.0,
+                "size_mult": 1.0,  "label": "NORMAL"}
+    elif vix < 25:
+        return {"sl_atr_mult": 1.6, "target_atr_mult": 2.5,
+                "size_mult": 0.7,  "label": "ELEVATED"}
+    else:
+        return {"sl_atr_mult": 2.0, "target_atr_mult": 3.0,
+                "size_mult": 0.5,  "label": "EXTREME"}

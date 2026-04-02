@@ -278,3 +278,116 @@ class ExpectancyTracker:
             "expectancy": round(exp, 2),
             "status": "✅ Positive edge" if exp > 0 else "⚠️ Negative edge",
         }
+
+
+# ══════════════════════════════════════════════
+#  V5.2 — TRANCHE MANAGER (Multi-Entry System)
+# ══════════════════════════════════════════════
+
+class TrancheManager:
+    """
+    Manages 3-tranche position building for each symbol.
+    Tranche 1: Entry on signal fire (50% of position)
+    Tranche 2: Add on first pullback to entry zone (30%)
+    Tranche 3: Add on breakout continuation (20%)
+    """
+
+    def __init__(self, symbol: str, direction: str,
+                 entry_price: float, atr: float,
+                 total_qty: int):
+        self.symbol       = symbol
+        self.direction    = direction
+        self.entry_price  = entry_price
+        self.atr          = atr
+        self.total_qty    = total_qty
+        self.tranches     = []
+        self.filled       = 0
+
+        # Define the 3 entry levels
+        if direction == "LONG":
+            self.levels = {
+                "T1": entry_price,
+                "T2": entry_price - 0.3 * atr,
+                "T3": entry_price + 0.5 * atr,
+            }
+            self.quantities = {
+                "T1": max(int(total_qty * 0.50), 1),
+                "T2": max(int(total_qty * 0.30), 1),
+                "T3": max(int(total_qty * 0.20), 1),
+            }
+        else:  # SHORT
+            self.levels = {
+                "T1": entry_price,
+                "T2": entry_price + 0.3 * atr,
+                "T3": entry_price - 0.5 * atr,
+            }
+            self.quantities = {
+                "T1": max(int(total_qty * 0.50), 1),
+                "T2": max(int(total_qty * 0.30), 1),
+                "T3": max(int(total_qty * 0.20), 1),
+            }
+
+        # Shared SL and target — based on full position
+        self.sl_price     = (entry_price - 1.2 * atr
+                             if direction == "LONG"
+                             else entry_price + 1.2 * atr)
+        self.target_price = (entry_price + 2.0 * atr
+                             if direction == "LONG"
+                             else entry_price - 2.0 * atr)
+
+    def check_tranche_fill(self, current_price: float) -> Optional[Dict]:
+        """
+        Call every candle. Returns fill instruction if a tranche
+        level is touched and not yet filled.
+        """
+        filled_ids = [t["id"] for t in self.tranches]
+
+        for tranche_id, level in self.levels.items():
+            if tranche_id in filled_ids:
+                continue
+
+            touched = False
+            if self.direction == "LONG":
+                if tranche_id == "T1":
+                    touched = True  # T1 fires immediately
+                elif tranche_id == "T2":
+                    touched = current_price <= level * 1.002
+                elif tranche_id == "T3":
+                    touched = current_price >= level * 0.998
+            else:
+                if tranche_id == "T1":
+                    touched = True
+                elif tranche_id == "T2":
+                    touched = current_price >= level * 0.998
+                elif tranche_id == "T3":
+                    touched = current_price <= level * 1.002
+
+            if touched:
+                fill = {
+                    "id":        tranche_id,
+                    "symbol":    self.symbol,
+                    "qty":       self.quantities[tranche_id],
+                    "price":     round(current_price, 2),
+                    "sl":        round(self.sl_price, 2),
+                    "target":    round(self.target_price, 2),
+                    "direction": self.direction,
+                }
+                self.tranches.append(fill)
+                self.filled += self.quantities[tranche_id]
+                return fill
+
+        return None
+
+    def all_filled(self) -> bool:
+        return len(self.tranches) == 3
+
+    def get_avg_entry(self) -> float:
+        if not self.tranches:
+            return self.entry_price
+        total_cost = sum(t["price"] * t["qty"] for t in self.tranches)
+        total_qty  = sum(t["qty"] for t in self.tranches)
+        return round(total_cost / total_qty, 2) if total_qty > 0 else self.entry_price
+
+    def status(self) -> str:
+        filled_ids = [t["id"] for t in self.tranches]
+        return f"Tranches: {','.join(filled_ids)} | Avg: ₹{self.get_avg_entry()} | Filled: {self.filled}/{self.total_qty}"

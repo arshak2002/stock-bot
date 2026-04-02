@@ -218,6 +218,147 @@ def pcr_direction_ok(pcr: float, strategy_type: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════
+# V5.2 NEW SCORERS
+# ═══════════════════════════════════════════════════════════
+
+def score_candle_pattern(patterns: dict, strategy_type: str) -> float:
+    """Adds up to +1.0 based on candlestick pattern alignment."""
+    if not patterns:
+        return 0.0
+
+    bullish_strong = {"BULLISH_ENGULFING", "PIN_BAR_BULL"}
+    bullish_medium = {"HAMMER"}
+    bearish_strong = {"BEARISH_ENGULFING", "PIN_BAR_BEAR"}
+    bearish_medium = {"SHOOTING_STAR"}
+    neutral        = {"DOJI", "INSIDE_BAR"}
+
+    if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+        if any(p in bullish_strong for p in patterns):
+            return 1.0
+        elif any(p in bullish_medium for p in patterns):
+            return 0.75
+        elif any(p in neutral for p in patterns):
+            return -0.5
+        elif any(p in bearish_strong for p in patterns):
+            return -1.0
+    elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+        if any(p in bearish_strong for p in patterns):
+            return 1.0
+        elif any(p in bearish_medium for p in patterns):
+            return 0.75
+        elif any(p in neutral for p in patterns):
+            return -0.5
+        elif any(p in bullish_strong for p in patterns):
+            return -1.0
+    return 0.0
+
+
+def score_intraday_sr(price: float, sr_levels: dict, strategy_type: str) -> float:
+    """Scores +1.0 if price is at a key intraday S/R level."""
+    if not sr_levels:
+        return 0.0
+    tolerance = 0.003
+
+    if strategy_type in ("ORB_LONG",):
+        r1 = sr_levels.get("resistance_1")
+        if r1 and abs(price - r1) / r1 < tolerance:
+            return 1.0
+        s1 = sr_levels.get("support_1")
+        if s1 and abs(price - s1) / s1 < tolerance:
+            return 0.75
+    elif strategy_type in ("ORB_SHORT",):
+        s1 = sr_levels.get("support_1")
+        if s1 and abs(price - s1) / s1 < tolerance:
+            return 1.0
+        r1 = sr_levels.get("resistance_1")
+        if r1 and abs(price - r1) / r1 < tolerance:
+            return 0.75
+    elif strategy_type == "REVERSAL_LONG":
+        s1 = sr_levels.get("support_1")
+        s2 = sr_levels.get("support_2")
+        if s1 and abs(price - s1) / s1 < tolerance:
+            return 1.0
+        if s2 and abs(price - s2) / s2 < tolerance:
+            return 0.75
+    elif strategy_type == "REVERSAL_SHORT":
+        r1 = sr_levels.get("resistance_1")
+        if r1 and abs(price - r1) / r1 < tolerance:
+            return 1.0
+    return 0.0
+
+
+def score_vpoc(price: float, vp: dict, strategy_type: str) -> float:
+    """Scores based on price position relative to VPOC and Value Area."""
+    if not vp:
+        return 0.0
+    vpoc    = vp.get("vpoc")
+    va_high = vp.get("va_high")
+    va_low  = vp.get("va_low")
+    if not vpoc:
+        return 0.0
+    tolerance = 0.003
+
+    if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+        if abs(price - vpoc) / vpoc < tolerance:
+            return 0.75
+        if va_low and price < va_low * 0.998:
+            return 1.0
+    elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+        if abs(price - vpoc) / vpoc < tolerance:
+            return 0.75
+        if va_high and price > va_high * 1.002:
+            return 1.0
+    return 0.0
+
+
+def score_ofi(ofi_data: dict, strategy_type: str) -> float:
+    """Scores based on order flow imbalance direction."""
+    if not ofi_data:
+        return 0.0
+    if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+        if ofi_data.get("buyers_in_control") and ofi_data.get("ofi_trend", 0) > 0.1:
+            return 0.5
+        elif ofi_data.get("sellers_in_control"):
+            return -0.5
+    elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+        if ofi_data.get("sellers_in_control") and ofi_data.get("ofi_trend", 0) < -0.1:
+            return 0.5
+        elif ofi_data.get("buyers_in_control"):
+            return -0.5
+    return 0.0
+
+
+def apply_fii_bias(score: float, fii_data: dict, strategy_type: str) -> float:
+    """Adjusts score by ±0.5 based on FII/DII flow direction."""
+    if not fii_data:
+        return score
+    bias = fii_data.get("bias", "NEUTRAL")
+    if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+        if bias == "BULLISH":  return score + 0.5
+        elif bias == "BEARISH": return score - 0.5
+    elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+        if bias == "BEARISH":  return score + 0.5
+        elif bias == "BULLISH": return score - 0.5
+    return score
+
+
+def is_strategy_gap_aligned(strategy_type: str, gap: dict) -> bool:
+    """Blocks trades that go against the gap classification."""
+    if not gap:
+        return True
+    gtype = gap.get("gap_type", "")
+    if gtype == "BREAKAWAY":
+        if "LONG" in strategy_type and gap.get("direction") == "DOWN":
+            return False
+        if "SHORT" in strategy_type and gap.get("direction") == "UP":
+            return False
+    if gtype == "EXHAUSTION":
+        if "ORB" in strategy_type:
+            return False
+    return True
+
+
+# ═══════════════════════════════════════════════════════════
 # MAIN STRATEGY CLASSES
 # ═══════════════════════════════════════════════════════════
 
@@ -404,24 +545,35 @@ class CorrelationGuard:
         return "No positions"
 
 # ═══════════════════════════════════════════════════════════
-# UPGRADED 11-POINT SCORER — V5.1
+# V5.2 MASTER SCORER — 14 POINTS + MODIFIERS
 # ═══════════════════════════════════════════════════════════
-# Criterion         Weight   Function              Notes
-# ─────────────────────────────────────────────────────────
-# Volume surge      2.0      score_volume()        Same-time 5-day baseline
-# Supertrend        2.0      score_supertrend()    1-min + 5-min agreement
-# VWAP bands        1.0      score_vwap_bands()    ±1σ/±2σ positioning
-# EMA cross         1.0      score_ema_cross()     Replaces candle type
-# RSI (dual)        1.0      score_rsi()           RSI7 trigger + RSI14 confirm
-# ADX (split)       1.0      score_adx()           Direction-aware threshold
-# Bollinger         1.0      score_bollinger()     Strategy-aware (squeeze vs touch)
-# Price move        1.0      (unchanged)           ≥ 0.7% from open
-# MACD divergence   0.5      score_macd()          Divergence only, not cross
-# ORB bonus         0.5      (unchanged)           Volume-confirmed ORB only
-# ─────────────────────────────────────────────────────────
-# MAX TOTAL         11.0
-# MIN TO FIRE        7.0     (morning) / 8.0 (afternoon)
-# PCR FILTER        pre-check — blocks counter-trend trades silently
+# Criterion          Max    Function                 Type
+# ────────────────────────────────────────────────────────────
+# Volume surge       2.0    score_volume()           CORE
+# Supertrend (dual)  2.0    score_supertrend()       CORE
+# Candle pattern     1.0    score_candle_pattern()   NEW V5.2
+# Intraday S/R       1.0    score_intraday_sr()      NEW V5.2
+# VWAP bands         1.0    score_vwap_bands()       UPGRADED
+# EMA cross          1.0    score_ema_cross()        UPGRADED
+# Dual RSI           1.0    score_rsi()              UPGRADED
+# ADX (split)        1.0    score_adx()              UPGRADED
+# Bollinger          1.0    score_bollinger()        UPGRADED
+# Price move         1.0    (unchanged)              CORE
+# VPOC proximity     1.0    score_vpoc()             NEW V5.2
+# MACD divergence    0.5    score_macd()             UPGRADED
+# ORB bonus          0.5    (unchanged)              CORE
+# OFI imbalance      0.5    score_ofi()              NEW V5.2
+# ────────────────────────────────────────────────────────────
+# BASE TOTAL        14.0
+# MODIFIERS (additive):
+#   Sector bonus    ±0.5    get_sector_score_bonus()
+#   FII/DII bias    ±0.5    apply_fii_bias()
+# EFFECTIVE MAX     15.0
+# MIN TO FIRE        7.0    morning / 8.0 afternoon
+# PRE-FILTERS:
+#   PCR direction   hard block
+#   Gap alignment   hard block if gap conflicts
+#   VIX extreme     hard block if VIX > 30
 # ═══════════════════════════════════════════════════════════
 
 class TradeScorer:
@@ -444,6 +596,16 @@ class TradeScorer:
         ema9_s    = data["ema9_series"]
         ema21_s   = data["ema21_series"]
         closes_s  = data["closes_series"]
+        symbol    = data.get("symbol", "")
+
+        # V5.2 new data fields
+        candle_patterns = data.get("candle_patterns", {})
+        intraday_sr     = data.get("intraday_sr", {})
+        vpoc_data       = data.get("vpoc", {})
+        ofi_data        = data.get("ofi", {})
+        fii_data        = data.get("fii_dii", {})
+
+        # ── V5.1 Core Criteria ──
 
         # Price Move
         if strategy_type in ("ORB_LONG", "REVERSAL_SHORT"): 
@@ -523,10 +685,56 @@ class TradeScorer:
                         ((strategy_type == "ORB_LONG" and orb_signal == "BUY_BREAKOUT") or 
                          (strategy_type == "ORB_SHORT" and orb_signal == "SELL_BREAKOUT"))) else 0.0
         if orb_sc > 0:
-            val = sc["weight_orb"] * orb_sc
             score += orb_sc
             reasons.append("ORB breakout")
             breakdown.append(f"orb:+{orb_sc}")
+
+        # ── V5.2 New Criteria ──
+
+        # Candle Pattern (max +1.0)
+        cp_sc = score_candle_pattern(candle_patterns, strategy_type)
+        if cp_sc != 0:
+            score += cp_sc
+            pnames = ','.join(candle_patterns.keys()) if candle_patterns else 'NONE'
+            reasons.append(f"Pattern:{pnames}")
+            breakdown.append(f"cp:{'+' if cp_sc>0 else ''}{cp_sc}")
+
+        # Intraday S/R (max +1.0)
+        sr_sc = score_intraday_sr(current, intraday_sr, strategy_type)
+        if sr_sc > 0:
+            score += sr_sc
+            reasons.append("S/R Level")
+            breakdown.append(f"sr:+{sr_sc}")
+
+        # VPOC (max +1.0)
+        vp_sc = score_vpoc(current, vpoc_data, strategy_type)
+        if vp_sc > 0:
+            score += vp_sc
+            reasons.append("VPOC")
+            breakdown.append(f"vpoc:+{vp_sc}")
+
+        # OFI (max +0.5)
+        ofi_sc = score_ofi(ofi_data, strategy_type)
+        if ofi_sc != 0:
+            score += ofi_sc
+            reasons.append(f"OFI")
+            breakdown.append(f"ofi:{'+' if ofi_sc>0 else ''}{ofi_sc}")
+
+        # ── V5.2 Modifiers (push above/below base) ──
+
+        # Sector Bonus (±0.5)
+        try:
+            from execution import get_sector_score_bonus
+            sect_sc = get_sector_score_bonus(symbol, strategy_type)
+            if sect_sc != 0:
+                score += sect_sc
+                reasons.append(f"Sector:{'+' if sect_sc>0 else ''}{sect_sc}")
+                breakdown.append(f"sect:{'+' if sect_sc>0 else ''}{sect_sc}")
+        except Exception:
+            pass
+
+        # FII/DII Bias (±0.5)
+        score = apply_fii_bias(score, fii_data, strategy_type)
 
         return {"score": round(score, 1), "reasons": reasons, "breakdown": "|".join(breakdown)}
 
@@ -561,6 +769,19 @@ class MasterStrategy:
         pcr = data.get("pcr", 1.0)
         if allowed and not pcr_direction_ok(pcr, allowed[0]):
             return _result("NO TRADE", 0, pct_from_open, intraday_range, f"PCR_BLOCK={pcr}", "")
+
+        # V5.2: Gap alignment filter
+        gap_data = data.get("gap_classification", {})
+        if allowed and gap_data:
+            if not is_strategy_gap_aligned(allowed[0], gap_data):
+                return _result("NO TRADE", 0, pct_from_open, intraday_range,
+                               f"GAP_BLOCK={gap_data.get('gap_type','?')}", "")
+
+        # V5.2: VIX extreme block
+        vix = data.get("india_vix", 15.0)
+        if vix > 30:
+            return _result("NO TRADE", 0, pct_from_open, intraday_range,
+                           f"VIX_EXTREME={vix}", "")
 
         is_early = now_time < no_rev_before
 
@@ -636,7 +857,7 @@ class MasterStrategy:
                     breakdown = sell["breakdown"]
 
         grade = "A+" if score >= cfg["scoring"]["grade_a_plus"] else ("A" if score >= cfg["scoring"]["grade_a"] else "-")
-        stars = f"{'★' * int(score)}{'☆' * (11 - int(score))}  {score}/11" if score > 0 else "—"
+        stars = f"{'★' * min(int(score), 14)}{'☆' * max(14 - int(score), 0)}  {score}/14" if score > 0 else "—"
 
         return {
             "signal": signal, "score": score, "grade": grade,
