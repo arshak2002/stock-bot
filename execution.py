@@ -592,7 +592,7 @@ class TradeLogger:
         "orb_signal", "slippage_pct", "true_edge",
         "position_size_units", "risk_amount",
         "entry", "stop_loss", "target", "reason",
-        "news_status", "circuit_breaker_active",
+        "news_status", "circuit_breaker_active", "tranche_id", "tranche_status"
     ]
 
     def __init__(self, filepath: str):
@@ -603,6 +603,21 @@ class TradeLogger:
                 csv.writer(f).writerow(self.HEADERS)
 
     def log(self, data: Dict, result: Dict, extras: Dict):
+        self._log_row(data, result, extras)
+
+    def log_fill(self, symbol: str, fill: Dict, avg_entry: float, status: str):
+        """Logs an individual tranche fill."""
+        row = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            symbol, fill["price"], f"FILL_{fill['id']}", "", "",
+            "", "", "", "", "", "", "", "", "", "", "",
+            fill["qty"], "", avg_entry, fill["sl"], fill["target"], 
+            f"Tranche Fill | {status}", "", "", fill["id"], status
+        ]
+        with open(self.filepath, "a", newline="") as f:
+            csv.writer(f).writerow(row)
+
+    def _log_row(self, data: Dict, result: Dict, extras: Dict):
         if result["signal"] == "NO TRADE":
             return
         st_dir = data.get("supertrend", {}).get("dir_1min", "")
@@ -621,6 +636,7 @@ class TradeLogger:
             result["entry"], result["stop_loss"], result["target"],
             result["reason"],
             extras.get("news_status", ""), extras.get("circuit_active", ""),
+            "", "" # tranche_id, tranche_status
         ]
         with open(self.filepath, "a", newline="") as f:
             csv.writer(f).writerow(row)

@@ -63,11 +63,22 @@ class PositionSizer:
         avg_win: float,
         avg_loss: float,
         regime_size_mult: float,
+        vix: float,
         cfg: Dict,
     ) -> Dict[str, Any]:
         ac = cfg["account"]
         risk_pct = min(ac["risk_per_trade_pct"], ac["max_risk_pct"]) / 100
         risk_amount = capital * risk_pct
+
+        # V5.2: India VIX Adaptive Sizing
+        try:
+            from execution import get_vix_adjusted_params
+            vix_params = get_vix_adjusted_params(vix)
+            vix_size_mult = vix_params["size_mult"]
+            vix_label = vix_params["label"]
+        except Exception:
+            vix_size_mult = 1.0
+            vix_label = "NORMAL"
 
         # ATR-based position size
         sl_distance = atr_val * cfg["risk_management"]["sl_atr_multiplier"] if atr_val and atr_val > 0 else 1
@@ -87,18 +98,16 @@ class PositionSizer:
         else:
             qty = int(base_qty * 0.5)
 
-        # Apply regime multiplier (weak regimes = smaller positions)
-        qty = max(int(qty * regime_size_mult), 1)
-
-        # Hard cap: 5% of capital
-        max_position_value = capital * (ac["max_position_pct"] / 100)
-        # We don't know exact price here, so we return qty and let caller verify
+        # Apply regime multiplier + VIX multiplier
+        qty = max(int(qty * regime_size_mult * vix_size_mult), 1)
 
         return {
             "quantity": qty,
-            "risk_amount": round(risk_amount, 2),
+            "risk_amount": round(risk_amount * vix_size_mult, 2),
             "kelly_fraction": round(kelly_capped, 4),
             "regime_mult": regime_size_mult,
+            "vix_mult": vix_size_mult,
+            "vix_label": vix_label,
             "base_qty": base_qty,
         }
 

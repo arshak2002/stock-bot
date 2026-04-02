@@ -139,14 +139,13 @@ class IntradayBot:
         if liquidity["is_liquidity_trap"]:
             print(f"  ⚠️  Trap:    {liquidity['trap_type']}")
 
-        sig = result["signal"]
-        print(f"  ── Signal ──")
-        print(f"  Signal:     {sig}   "
-              f"(B={self.trade_count['BUY']}  S={self.trade_count['SELL']})")
-        print(f"  Score:      {result['score_display']}")
+        print(f"  ── Strategy ──")
+        print(f"  Signal:     {result['signal']}  (Score: {result['score_display']})")
         print(f"  Grade:      {result['grade']}")
+        if "vix_label" in extras:
+            print(f"  VIX Regime: {extras['vix_label']}")
 
-        if sig != "NO TRADE":
+        if result["signal"] != "NO TRADE":
             slip = extras.get("slippage_pct", 0)
             edge = extras.get("true_edge", 0)
             pos = extras.get("position_size", 0)
@@ -231,17 +230,50 @@ class IntradayBot:
                         continue
 
                     df_1m = data.pop("df_1m", None)
+                    current_p = data["current_price"]
+                    atr_val = data.get("atr") or 0
 
-                    # ── 2. ORB ──
+                    # ── 2. V5.2: Tranche Fill Check ──
+                    if sym in self.active_tranches:
+                        tm = self.active_tranches[sym]
+                        fill = tm.check_tranche_fill(current_p)
+                        if fill:
+                            print(f"🔥 [TRANCHE FILL] {sym} {fill['id']} @ ₹{fill['price']} | {tm.status()}")
+                            TelegramAlerter.send(
+                                f"🔥 *TRANCHE FILL: {sym}*\n"
+                                f"ID: {fill['id']} | Price: ₹{fill['price']}\n"
+                                f"Status: {tm.status()}",
+                                sym, cfg
+                            )
+                            self.logger.log_fill(sym, fill, tm.get_avg_entry(), tm.status())
+
+                        # Exit if SL/Target hit
+                        if (tm.direction == "LONG" and (current_p <= tm.sl_price or current_p >= tm.target_price)) or \
+                           (tm.direction == "SHORT" and (current_p >= tm.sl_price or current_p <= tm.target_price)):
+                            exit_reason = "TARGET HIT 🎯" if (tm.direction == "LONG" and current_p >= tm.target_price) or \
+                                                            (tm.direction == "SHORT" and current_p <= tm.target_price) else "STOP LOSS HIT 🛑"
+                            print(f"🏁 [TRADE CLOSED] {sym} | {exit_reason} @ ₹{current_p}")
+                            TelegramAlerter.send(f"🏁 *TRADE CLOSED: {sym}*\nReason: {exit_reason}\nFinal PnL: {tm.status()}", sym, cfg)
+                            
+                            pnl_pct = ((current_p - tm.get_avg_entry()) / tm.get_avg_entry()) * 100 if tm.direction == "LONG" else \
+                                      ((tm.get_avg_entry() - current_p) / tm.get_avg_entry()) * 100
+                            self.expectancy.record(pnl_pct)
+                            self.loss_guard.record_result(pnl_pct > 0)
+                            self.circuit.record_trade(pnl_pct * cap / 100)
+                            
+                            CorrelationGuard.remove_position(sym)
+                            del self.active_tranches[sym]
+                            continue 
+
+                    # ── 3. ORB ──
                     self.orbs[sym].capture_range(df_1m)
-                    orb_result = self.orbs[sym].evaluate(data["current_price"], data["volume_ratio"])
+                    orb_result = self.orbs[sym].evaluate(current_p, data["volume_ratio"])
 
-                    # ── 3. Regime ──
+                    # ── 4. Regime ──
                     regime_info = MarketRegime.detect(data, cfg)
 
-                    # ── 4. Liquidity Sweep ──
-                    atr_val = data.get("atr") or 0
-                    liquidity = LiquiditySweepFilter.detect(df_1m, data["current_price"], atr_val, cfg)
+                    # ── 5. Liquidity Sweep ──
+                    liquidity = LiquiditySweepFilter.detect(df_1m, current_p, atr_val, cfg)
 
                     # ── V5.2: Compute new indicators ──
                     try:
@@ -330,17 +362,31 @@ class IntradayBot:
 
                         # Position sizing
                         exp = self.expectancy.compute()
+                        vix = data.get("india_vix", 15.0)
                         pos = PositionSizer.calculate(
                             cap, atr_val,
                             exp["win_rate"], exp["avg_win"], exp["avg_loss"],
-                            regime_info["size_mult"], cfg,
+                            regime_info["size_mult"], vix, cfg,
                         )
                         extras["position_size"] = pos["quantity"]
                         extras["risk_amount"] = pos["risk_amount"]
+                        extras["vix_label"] = pos["vix_label"]
 
                         # Record trade
                         self.trade_count[result["signal"]] += 1
                         CorrelationGuard.add_position(data["symbol"])
+
+                        # V5.2: Initialize Tranche Manager
+                        if data["symbol"] not in self.active_tranches:
+                            dir_str = "LONG" if result["signal"] == "BUY" else "SHORT"
+                            self.active_tranches[data["symbol"]] = TrancheManager(
+                                symbol=data["symbol"],
+                                direction=dir_str,
+                                entry_price=result["entry"],
+                                atr=atr_val,
+                                total_qty=pos["quantity"]
+                            )
+                            print(f"🌊 [TRANCHE MGR] Initialized for {data['symbol']} ({dir_str})")
 
                     # ── 10. Display + Log + Alert ──
                     self._display(data, result, regime_info, orb_result, liquidity, extras)

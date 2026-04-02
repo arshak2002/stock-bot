@@ -65,17 +65,48 @@ def compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # ══════════════════════════════════════════════
 
 def get_universe() -> List[str]:
-    """Fetch Nifty 50 and Nifty Midcap 150 (top 100)."""
-    symbols = set(NIFTY50)
-    try:
-        url = "https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv"
-        df = pd.read_csv(url)
-        # Nifty Midcap indices are usually sorted by market cap or free float
-        midcap = df["Symbol"].head(100).tolist()
-        symbols.update(midcap)
-    except Exception as e:
-        print(f"[WARN] Could not fetch Midcap 150: {e}")
-    return [s + ".NS" for s in list(symbols)]
+    """
+    Fetch comprehensive universe: Nifty 50 + Nifty Next 50 + Nifty Midcap 150.
+    Expanded to ~250 high-liquidity stocks.
+    """
+    urls = {
+        "N50":   "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
+        "NNext": "https://archives.nseindia.com/content/indices/ind_niftynext50list.csv",
+        "Mid150": "https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv"
+    }
+    
+    symbols = set()
+    
+    # Banking keyword filter
+    BANK_EXCLUDES = {
+        "HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK", 
+        "PNB", "BOB", "CANBK", "IDBI", "IDFCFIRSTB", "BANKINDIA", "UNIONBANK", 
+        "FEDERALBNK", "RBLBANK", "BANDHANBNK", "AUBANK", "YESBANK", "IDFC", 
+        "UCOBANK", "IOB", "CENTRALBK", "MAHABANK", "PSB", "J&KBANK", "SOUTHBANK", 
+        "KARURVYSYA", "CSBBANK", "DCBBANK", "DHANBANK", "CITYUNIONBK", "CUB",
+        "BANKBARODA", "CANBK"
+    }
+
+    print("[*] Fetching expanded universe...")
+    for name, url in urls.items():
+        try:
+            df = pd.read_csv(url)
+            if "Symbol" in df.columns:
+                batch = df["Symbol"].tolist()
+                filtered = [s for s in batch if s not in BANK_EXCLUDES and 
+                            not s.endswith("BANK") and 
+                            not s.endswith("BNK")]
+                symbols.update(filtered)
+                print(f"  + Added {len(filtered)} stocks from {name}")
+        except Exception as e:
+            print(f"  ! Error fetching {name}: {e}")
+
+    # Fallback to local NIFTY50 if everything fails
+    if not symbols:
+        symbols = set(NIFTY50)
+
+    final_list = [s + ".NS" for s in list(symbols)]
+    return final_list
 
 def get_fo_ban_list() -> set:
     try:
