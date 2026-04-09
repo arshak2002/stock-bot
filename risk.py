@@ -311,7 +311,8 @@ class TrancheManager:
 
     def __init__(self, symbol: str, direction: str,
                  entry_price: float, atr: float,
-                 total_qty: int):
+                 total_qty: int,
+                 sl_price: float = None, target_price: float = None):
         self.symbol       = symbol
         self.direction    = direction
         self.entry_price  = entry_price
@@ -320,12 +321,15 @@ class TrancheManager:
         self.tranches     = []
         self.filled       = 0
 
+        # Enforce minimum ATR so SL is never less than 0.2% away
+        safe_atr = max(atr, entry_price * 0.002) if atr else entry_price * 0.002
+
         # Define the 3 entry levels
         if direction == "LONG":
             self.levels = {
                 "T1": entry_price,
-                "T2": entry_price - 0.3 * atr,
-                "T3": entry_price + 0.5 * atr,
+                "T2": entry_price - 0.3 * safe_atr,
+                "T3": entry_price + 0.5 * safe_atr,
             }
             self.quantities = {
                 "T1": max(int(total_qty * 0.50), 1),
@@ -335,8 +339,8 @@ class TrancheManager:
         else:  # SHORT
             self.levels = {
                 "T1": entry_price,
-                "T2": entry_price + 0.3 * atr,
-                "T3": entry_price - 0.5 * atr,
+                "T2": entry_price + 0.3 * safe_atr,
+                "T3": entry_price - 0.5 * safe_atr,
             }
             self.quantities = {
                 "T1": max(int(total_qty * 0.50), 1),
@@ -344,13 +348,17 @@ class TrancheManager:
                 "T3": max(int(total_qty * 0.20), 1),
             }
 
-        # Shared SL and target — based on full position
-        self.sl_price     = (entry_price - 1.2 * atr
-                             if direction == "LONG"
-                             else entry_price + 1.2 * atr)
-        self.target_price = (entry_price + 2.0 * atr
-                             if direction == "LONG"
-                             else entry_price - 2.0 * atr)
+        # Use caller-supplied SL/target (from strategy) if provided, else compute from ATR
+        if sl_price and target_price:
+            self.sl_price     = sl_price
+            self.target_price = target_price
+        else:
+            self.sl_price     = (entry_price - 1.2 * safe_atr
+                                 if direction == "LONG"
+                                 else entry_price + 1.2 * safe_atr)
+            self.target_price = (entry_price + 2.0 * safe_atr
+                                 if direction == "LONG"
+                                 else entry_price - 2.0 * safe_atr)
 
     def check_tranche_fill(self, current_price: float) -> Optional[Dict]:
         """

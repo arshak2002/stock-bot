@@ -66,6 +66,7 @@ class IntradayBot:
         self.active_tranches = {}   # V5.2: symbol -> TrancheManager
         self.signaled_today = set() # symbols that already got an entry signal today
         self._signal_date = datetime.now().strftime("%Y-%m-%d")
+        self._last_trade_time = {}  # symbol -> datetime of last trade close (cooldown)
         
         # Schedule morning brief
         schedule.every().day.at("09:14").do(self.send_morning_brief)
@@ -274,13 +275,21 @@ class IntradayBot:
 
                             CorrelationGuard.remove_position(sym)
                             del self.active_tranches[sym]
-                            self.signaled_today.discard(sym)  # allow re-entry after close
+                            self._last_trade_time[sym] = datetime.now()
+                            # Keep in signaled_today — re-entry only allowed after 15-min cooldown
                         else:
                             continue  # trade still open — skip signal pipeline entirely
 
-                    # Skip if already traded this symbol today
+                    # Skip if already traded this symbol today (or within 15-min cooldown)
                     if sym in self.signaled_today:
-                        continue
+                        last = self._last_trade_time.get(sym)
+                        if last is None:
+                            continue  # trade still open — no cooldown yet
+                        elapsed = (datetime.now() - last).seconds / 60
+                        if elapsed < 15:
+                            continue  # within 15-min cooldown after trade close
+                        else:
+                            self.signaled_today.discard(sym)  # cooldown expired, allow re-entry
 
                     # ── 3. ORB ──
                     self.orbs[sym].capture_range(df_1m)
@@ -406,9 +415,11 @@ class IntradayBot:
                                 direction=dir_str,
                                 entry_price=result["entry"],
                                 atr=atr_val,
-                                total_qty=pos["quantity"]
+                                total_qty=pos["quantity"],
+                                sl_price=result["stop_loss"],
+                                target_price=result["target"],
                             )
-                            print(f"🌊 [TRANCHE MGR] Initialized for {data['symbol']} ({dir_str})")
+                            print(f"🌊 [TRANCHE MGR] Initialized for {data['symbol']} ({dir_str}) | SL=₹{result['stop_loss']} TGT=₹{result['target']}")
 
                     # ── 10. Display + Log + Alert ──
                     self._display(data, result, regime_info, orb_result, liquidity, extras)
