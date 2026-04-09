@@ -528,6 +528,141 @@ def classify_gap(today_open: float, prev_close: float,
 #  V5.2 — ORDER FLOW IMBALANCE (OFI)
 # ───────────────────────────────────────
 
+def calculate_roc(close: pd.Series, period: int = 10) -> Optional[float]:
+    """
+    Rate of Change — pure momentum. Better than MACD on 1-minute charts.
+    MACD needs 26 bars of lag; ROC(10) only needs 10 bars.
+    Positive + rising = accelerating up. Negative + falling = accelerating down.
+    Near zero = momentum exhausting (reversal warning).
+    """
+    if len(close) < period + 1:
+        return None
+    roc = ((close.iloc[-1] - close.iloc[-period - 1]) / close.iloc[-period - 1]) * 100
+    return round(float(roc), 4)
+
+
+def calculate_stoch_rsi(close: pd.Series, rsi_period: int = 14,
+                        stoch_period: int = 14, k_smooth: int = 3, d_smooth: int = 3) -> dict:
+    """
+    Stochastic RSI — applies the Stochastic formula to RSI values.
+    More sensitive and faster than raw RSI. Fires earlier on momentum shifts.
+    %K > %D + both rising from oversold/overbought = strong signal.
+    """
+    if len(close) < rsi_period + stoch_period + k_smooth + d_smooth:
+        return {"k": None, "d": None, "overbought": False, "oversold": False, "k_above_d": None}
+
+    rsi_vals = calculate_rsi_wilder(close, rsi_period)
+    rsi_min = rsi_vals.rolling(stoch_period).min()
+    rsi_max = rsi_vals.rolling(stoch_period).max()
+
+    stoch = (rsi_vals - rsi_min) / (rsi_max - rsi_min).replace(0, 1e-10)
+    k = stoch.rolling(k_smooth).mean() * 100
+    d = k.rolling(d_smooth).mean()
+
+    k_val = round(float(k.iloc[-1]), 2) if not pd.isna(k.iloc[-1]) else None
+    d_val = round(float(d.iloc[-1]), 2) if not pd.isna(d.iloc[-1]) else None
+
+    return {
+        "k": k_val,
+        "d": d_val,
+        "overbought": k_val is not None and k_val > 80,
+        "oversold":   k_val is not None and k_val < 20,
+        "k_above_d":  k_val is not None and d_val is not None and k_val > d_val,
+    }
+
+
+def calculate_cmf(df: pd.DataFrame, period: int = 20) -> float:
+    """
+    Chaikin Money Flow — volume-weighted buying/selling pressure.
+    Range: -1 to +1.
+    CMF > +0.1 = strong buying pressure (bullish).
+    CMF < -0.1 = strong selling pressure (bearish).
+    """
+    if len(df) < period:
+        return 0.0
+
+    high  = df["High"]
+    low   = df["Low"]
+    close = df["Close"]
+    vol   = df["Volume"]
+
+    hl_range = (high - low).replace(0, 1e-10)
+    clv = ((close - low) - (high - close)) / hl_range
+    mfv = clv * vol
+
+    cmf_val = mfv.rolling(period).sum() / vol.rolling(period).sum().replace(0, 1e-10)
+    val = cmf_val.iloc[-1]
+    return round(float(val), 4) if not pd.isna(val) else 0.0
+
+
+def calculate_ichimoku(df: pd.DataFrame) -> dict:
+    """
+    Ichimoku Cloud — all-in-one trend, momentum, and S/R indicator.
+    Periods: Tenkan=9, Kijun=26, Senkou B=52.
+    - Price above cloud + Tenkan > Kijun = strong bullish setup.
+    - Price below cloud + Tenkan < Kijun = strong bearish setup.
+    - TK cross inside/near cloud = weaker signal.
+    """
+    if len(df) < 52:
+        return {"tenkan": None, "kijun": None, "above_cloud": None,
+                "below_cloud": None, "tenkan_above_kijun": None, "cloud_bullish": None}
+
+    high  = df["High"]
+    low   = df["Low"]
+    close = df["Close"]
+
+    tenkan  = (high.rolling(9).max() + low.rolling(9).min()) / 2
+    kijun   = (high.rolling(26).max() + low.rolling(26).min()) / 2
+    senkou_a = ((tenkan + kijun) / 2).shift(26)
+    senkou_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
+
+    current_price = float(close.iloc[-1])
+    t_val = tenkan.iloc[-1]
+    k_val = kijun.iloc[-1]
+    sa    = senkou_a.iloc[-1]
+    sb    = senkou_b.iloc[-1]
+
+    t_val = float(t_val) if not pd.isna(t_val) else None
+    k_val = float(k_val) if not pd.isna(k_val) else None
+
+    cloud_top = cloud_bottom = None
+    cloud_bullish = None
+    if not pd.isna(sa) and not pd.isna(sb):
+        cloud_top    = max(float(sa), float(sb))
+        cloud_bottom = min(float(sa), float(sb))
+        cloud_bullish = float(sa) > float(sb)
+
+    return {
+        "tenkan":            round(t_val, 2) if t_val else None,
+        "kijun":             round(k_val, 2) if k_val else None,
+        "cloud_top":         round(cloud_top, 2) if cloud_top else None,
+        "cloud_bottom":      round(cloud_bottom, 2) if cloud_bottom else None,
+        "above_cloud":       cloud_top is not None and current_price > cloud_top,
+        "below_cloud":       cloud_bottom is not None and current_price < cloud_bottom,
+        "tenkan_above_kijun": t_val is not None and k_val is not None and t_val > k_val,
+        "cloud_bullish":     cloud_bullish,
+    }
+
+
+def calculate_williams_r(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+    """
+    Williams %R — measures overbought/oversold momentum.
+    Range: -100 to 0.
+    Above -20 = overbought (short signal).
+    Below -80 = oversold (long signal).
+    """
+    if len(df) < period:
+        return None
+
+    highest_high = df["High"].rolling(period).max()
+    lowest_low   = df["Low"].rolling(period).min()
+    close        = df["Close"]
+
+    wr = ((highest_high - close) / (highest_high - lowest_low).replace(0, 1e-10)) * -100
+    val = wr.iloc[-1]
+    return round(float(val), 2) if not pd.isna(val) else None
+
+
 def calculate_order_flow_imbalance(df: pd.DataFrame, lookback: int = 3) -> dict:
     """
     Measures buying/selling pressure from candle close position.

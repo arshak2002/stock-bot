@@ -169,12 +169,9 @@ class CircuitBreaker:
     """
 
     def __init__(self, capital: float, cfg: Dict):
-        cb = cfg["circuit_breaker"]
         self.capital = capital
-        self.daily_loss_limit = capital * (cb["daily_loss_limit_pct"] / 100)
-        self.daily_gain_lock = capital * (cb["daily_gain_lock_pct"] / 100)
-        self.max_drawdown_from_peak = cb["drawdown_from_peak_pct"] / 100
-        self.max_trades = cfg["session"]["max_trades_per_day"]
+        self.cfg = cfg
+        self._apply_cfg(cfg)
 
         self.daily_pnl = 0.0
         self.peak_equity = capital
@@ -182,6 +179,17 @@ class CircuitBreaker:
         self.halted = False
         self.halt_reason = ""
         self.today = datetime.now().strftime("%Y-%m-%d")
+
+    def _apply_cfg(self, cfg: Dict):
+        cb = cfg["circuit_breaker"]
+        self.daily_loss_limit = self.capital * (cb["daily_loss_limit_pct"] / 100)
+        self.daily_gain_lock  = self.capital * (cb["daily_gain_lock_pct"]  / 100)
+        self.max_drawdown_from_peak = cb["drawdown_from_peak_pct"] / 100
+        self.max_trades = cfg["session"]["max_trades_per_day"]
+
+    def update_cfg(self, cfg: Dict):
+        """Hot-reload circuit breaker thresholds from updated config."""
+        self._apply_cfg(cfg)
 
     def reset_if_new_day(self):
         today = datetime.now().strftime("%Y-%m-%d")

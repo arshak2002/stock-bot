@@ -14,22 +14,24 @@ account:
 # ── Session ──
 session:
   safe_open: "09:20"
-  safe_close: "14:45"
-  no_reversal_before: "09:45"
-  max_trades_per_day: 6    # total, not per side
-  poll_interval_sec: 10
+  safe_close: "15:15"
+  no_reversal_before: "09:35"
+  max_trades_per_day: 12   # total, not per side
+  poll_interval_sec: 5
 
 # ── Scoring ──
 scoring:
   # Time-of-day adaptive thresholds
-  min_score_orb_window: 7        # 9:30–10:00 AM
-  min_score_morning: 7           # 10:00–12:00
-  min_score_afternoon: 8         # 12:00–2:30
+  min_score_orb_window: 6        # 9:30–10:00 AM
+  min_score_morning: 6           # 10:00–12:00
+  min_score_afternoon: 6         # 12:00–3:15
   grade_a_plus: 9
   grade_a: 7
   
   min_score: 6             # lowered: 6/11 = balanced quality vs frequency
-  move_threshold_pct: 0.7  # lowered: 0.7% move from open is enough
+  move_threshold_pct: 0.5  # 0.5% move from open triggers reversal/ORB scoring
+  ema9_pullback_pct: 0.5   # widened: within 0.5% of EMA9 qualifies as pullback (was 0.3)
+  vwap_bounce_dist_pct: 0.25  # within 0.25% of VWAP triggers bounce strategy
   vwap_proximity_pct: 1.5        # widened: within 1.5% of VWAP counts
   cpr_proximity_pct: 0.75        # was 0.3 — this was the main culprit
   rsi_oversold: 45         # relaxed RSI bands
@@ -62,10 +64,10 @@ indicators:
   bollinger_period: 20
   bollinger_std: 2.0
   adx_period: 14
-  adx_orb_min: 25
-  adx_orb_strong: 30
-  adx_reversal_max: 18
-  adx_reversal_partial: 22
+  adx_orb_min: 20
+  adx_orb_strong: 27
+  adx_reversal_max: 22
+  adx_reversal_partial: 26
 
 # ── ATR-based SL/Target ──
 risk_management:
@@ -80,13 +82,13 @@ risk_management:
 
 # ── Circuit Breaker ──
 circuit_breaker:
-  daily_loss_limit_pct: -2.0
-  daily_gain_lock_pct: 1.5
-  drawdown_from_peak_pct: 1.5
+  daily_loss_limit_pct: -3.0
+  daily_gain_lock_pct: 6.0
+  drawdown_from_peak_pct: 2.5
 
 # ── Loss Streak ──
 loss_streak:
-  max_consecutive: 2
+  max_consecutive: 3
 
 # ── Slippage Model ──
 slippage:
@@ -107,7 +109,7 @@ regime:
   bb_weak_bw_min: 1.0
   bb_weak_bw_max: 2.0
   bb_range_bw: 1.0
-  min_confidence: 40       # lowered: allow trades in less certain regimes
+  min_confidence: 25       # lowered: allow trades in less certain regimes
 
 # ── Liquidity Sweep ──
 liquidity:
@@ -117,8 +119,8 @@ liquidity:
 
 # ── Correlation Guard ──
 correlation:
-  max_correlation: 0.7
-  lookback_days: 20
+  max_correlation: 0.85
+  lookback_days: 5
 
 # ── News Filter ──
 news:
@@ -131,7 +133,7 @@ telegram:
   enabled: true
   bot_token: "8605867676:AAFV3xfA5OkoJ2ZtGDGyE8tuFT-gHlrbf1Y"            # Get from @BotFather
   chat_id: "924804069"              # Your chat ID
-  throttle_seconds: 300    # 1 alert per symbol per 5 min
+  throttle_seconds: 60     # 1 alert per symbol per 1 min
 
 # ── Backtesting ──
 backtest:

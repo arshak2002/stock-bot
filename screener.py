@@ -317,7 +317,7 @@ def run_screener():
 
     # ── 3. FINAL RANKING ──
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    top_candidates = [c for c in candidates if c["score"] >= 30][:15]
+    top_candidates = [c for c in candidates if c["score"] >= 25][:25]
     
     # Add rank
     for i, c in enumerate(top_candidates):

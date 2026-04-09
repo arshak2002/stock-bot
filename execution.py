@@ -21,7 +21,10 @@ import yfinance as yf
 
 from indicators import (
     get_dual_rsi, ema, calculate_vwap_with_bands, calculate_volume_surge_ratio, atr,
-    get_dual_timeframe_supertrend, macd, detect_macd_divergence, calculate_bollinger_with_bandwidth, adx, pivot_points,
+    get_dual_timeframe_supertrend, macd, detect_macd_divergence,
+    calculate_bollinger_with_bandwidth, adx, pivot_points,
+    calculate_stoch_rsi, calculate_cmf, calculate_ichimoku, calculate_williams_r,
+    calculate_roc,
 )
 
 
@@ -249,18 +252,28 @@ class YFinanceProvider:
             rsi_dual   = get_dual_rsi(closes_1m)
             ema9_val   = ema(closes_1m, ind["ema_fast"])
             ema21_val  = ema(closes_1m, ind["ema_slow"])
-            
-            # EMA Series for EMA Cross
-            ema9_series = closes_1m.ewm(span=ind["ema_fast"], adjust=False).mean()
+
+            # EMA Series for EMA Cross + Pullback strategy
+            ema9_series  = closes_1m.ewm(span=ind["ema_fast"], adjust=False).mean()
             ema21_series = closes_1m.ewm(span=ind["ema_slow"], adjust=False).mean()
 
-            vol_r      = calculate_volume_surge_ratio(volume_val, df_1m_raw, df_1m_raw.index[-1].time())
+            # Use last completed 1m candle volume — more reliable than live tick volume
+            last_candle_vol = int(df_1m["Volume"].iloc[-1]) if not df_1m.empty else volume_val
+            vol_r_raw  = calculate_volume_surge_ratio(last_candle_vol, df_1m_raw, df_1m_raw.index[-1].time())
+            vol_r      = min(vol_r_raw, 20.0)  # cap: ratios >20x are data artifacts, not real surges
             atr_val    = atr(df_1m, ind["atr_period"])
             st_data    = get_dual_timeframe_supertrend(df_1m, df_5m, ind["supertrend_period"], ind["supertrend_multiplier"])
             macd_data  = macd(closes_1m, ind["macd_fast"], ind["macd_slow"], ind["macd_signal"])
             macd_div   = detect_macd_divergence(closes_1m, macd_data["hist_series"], 5) if macd_data else "NONE"
             boll_data  = calculate_bollinger_with_bandwidth(closes_1m, ind["bollinger_period"], ind["bollinger_std"])
             adx_val    = adx(df_1m, ind["adx_period"])
+
+            # ── New V5.3 Indicators ──
+            stoch_rsi_data  = calculate_stoch_rsi(closes_1m)
+            cmf_val         = calculate_cmf(df_1m)
+            ichimoku_data   = calculate_ichimoku(df_1m)
+            williams_r_val  = calculate_williams_r(df_1m)
+            roc_val         = calculate_roc(closes_1m, period=10)  # 10-bar momentum on 1m = 10-min ROC
 
             pivots_data = None
             if len(df_daily) >= 2:
@@ -293,7 +306,13 @@ class YFinanceProvider:
                 "bollinger": boll_data, "adx": adx_val,
                 "pivots": pivots_data, "gap_pct": gap_pct,
                 "df_1m": df_1m, "pcr": pcr_val,
-                "closes_series": closes_1m
+                "closes_series": closes_1m,
+                # V5.3 new indicators
+                "stoch_rsi": stoch_rsi_data,
+                "cmf": cmf_val,
+                "ichimoku": ichimoku_data,
+                "williams_r": williams_r_val,
+                "roc": roc_val,
             }
         except Exception as e:
             self._fail_count += 1
@@ -351,21 +370,23 @@ class SlippageModel:
     def compute_true_edge(
         entry: float, target: float, stop_loss: float,
         slippage_pct: float, direction: str,
+        win_rate: float = 0.5,
     ) -> float:
         """
-        True edge = expected value per trade MINUS round-trip slippage cost.
-        Assumes 50/50 win rate for raw edge calculation.
+        True edge = expected value using actual historical win rate.
+        EV = (win_rate × reward) - (loss_rate × risk) - round_trip_slippage
+        With no history, defaults to 50% win rate.
         """
-        total_cost_pct = slippage_pct * 2  # entry + exit slippage
+        total_cost_pct = slippage_pct * 2
         if direction == "BUY":
             reward_pct = ((target - entry) / entry) * 100
-            risk_pct = ((entry - stop_loss) / entry) * 100
+            risk_pct   = ((entry - stop_loss) / entry) * 100
         else:
             reward_pct = ((entry - target) / entry) * 100
-            risk_pct = ((stop_loss - entry) / entry) * 100
+            risk_pct   = ((stop_loss - entry) / entry) * 100
 
-        # Simple edge: (reward - risk) / 2 minus costs
-        raw_edge = (reward_pct - risk_pct) / 2
+        wr = max(min(win_rate, 0.80), 0.35)   # clamp 35–80% to avoid extremes on small samples
+        raw_edge = (wr * reward_pct) - ((1 - wr) * risk_pct)
         return round(raw_edge - total_cost_pct, 4)
 
     @staticmethod
@@ -466,6 +487,15 @@ class NewsFilter:
 
     RSS_FEEDS = [
         "https://www.moneycontrol.com/rss/latestnews.xml",
+        "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+        "https://feeds.reuters.com/reuters/INbusinessNews",
+    ]
+
+    GLOBAL_BLOCK_KEYWORDS = [
+        "federal reserve", "fed rate", "interest rate hike", "rate cut",
+        "us recession", "trade war", "tariff", "crude oil shock",
+        "rbi rate", "repo rate", "dollar surge", "rupee crash",
+        "global sell-off", "market crash", "circuit breaker",
     ]
 
     @classmethod
@@ -489,17 +519,18 @@ class NewsFilter:
             for feed_url in cls.RSS_FEEDS:
                 try:
                     feed = feedparser.parse(feed_url)
-                    for entry in feed.entries[:30]:
+                    for entry in feed.entries[:40]:
                         title = entry.get("title", "").lower()
                         summary = entry.get("summary", "").lower()
                         text = title + " " + summary
 
-                        # Check if this news is about our symbol
+                        # Symbol-specific block only — global macro is handled via score modifier
                         if clean_symbol.lower() in text:
                             for kw in cls.BLOCK_KEYWORDS:
                                 if kw in text:
                                     is_safe = False
                                     break
+
                         if not is_safe:
                             break
                 except Exception:
@@ -872,6 +903,90 @@ def fetch_india_vix() -> float:
         return vix
     except Exception:
         return _vix_cache.get("value", 15.0)
+
+
+_global_bias_cache = {"data": None, "fetched_at": None}
+
+def fetch_global_market_bias() -> dict:
+    """
+    Fetches overnight US market and Dollar Index direction as a macro filter.
+    Uses:
+      - S&P 500 (^GSPC): overall risk sentiment
+      - Nasdaq (^IXIC): tech/risk appetite
+      - DXY (DX-Y.NYB): strong dollar = headwind for Indian markets
+      - US VIX (^VIX): fear gauge — high VIX = risk-off globally
+
+    Returns a bias label: BULLISH / BEARISH / NEUTRAL
+    and a score modifier: +0.5 / -0.5 / 0.0
+    Cached for 30 minutes (re-fetch on market open).
+    """
+    global _global_bias_cache
+
+    if _global_bias_cache["fetched_at"]:
+        age = (datetime.now() - _global_bias_cache["fetched_at"]).seconds
+        if age < 1800 and _global_bias_cache["data"]:
+            return _global_bias_cache["data"]
+
+    try:
+        result = {"bias": "NEUTRAL", "score_mod": 0.0, "spx_chg": 0.0,
+                  "dxy_chg": 0.0, "us_vix": 20.0, "detail": ""}
+
+        # S&P 500 — last 2 daily closes
+        spx = yf.download("^GSPC", period="5d", interval="1d", progress=False)
+        if not spx.empty and len(spx) >= 2:
+            close_col = spx["Close"]
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]
+            spx_prev  = float(close_col.iloc[-2])
+            spx_last  = float(close_col.iloc[-1])
+            result["spx_chg"] = round((spx_last - spx_prev) / spx_prev * 100, 2)
+
+        # DXY (US Dollar Index) — strong dollar is negative for INR/Indian stocks
+        dxy = yf.download("DX-Y.NYB", period="5d", interval="1d", progress=False)
+        if not dxy.empty and len(dxy) >= 2:
+            close_col = dxy["Close"]
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]
+            dxy_prev  = float(close_col.iloc[-2])
+            dxy_last  = float(close_col.iloc[-1])
+            result["dxy_chg"] = round((dxy_last - dxy_prev) / dxy_prev * 100, 2)
+
+        # US VIX
+        uvix = yf.download("^VIX", period="2d", interval="1d", progress=False)
+        if not uvix.empty:
+            close_col = uvix["Close"]
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]
+            result["us_vix"] = round(float(close_col.iloc[-1]), 2)
+
+        # Bias logic:
+        # SPX up > 0.5% AND DXY neutral/down AND US VIX < 20 → BULLISH for India
+        # SPX down > 0.5% OR DXY up > 0.3% OR US VIX > 25 → BEARISH for India
+        spx_bull = result["spx_chg"] > 0.5
+        spx_bear = result["spx_chg"] < -0.5
+        dxy_bear = result["dxy_chg"] > 0.3   # strong dollar = negative for India
+        vix_fear = result["us_vix"] > 25
+
+        if spx_bull and not dxy_bear and not vix_fear:
+            result["bias"] = "BULLISH"
+            result["score_mod"] = 0.5
+            result["detail"] = f"SPX+{result['spx_chg']}% DXY{result['dxy_chg']:+.2f}% UVIX{result['us_vix']}"
+        elif spx_bear or dxy_bear or vix_fear:
+            result["bias"] = "BEARISH"
+            result["score_mod"] = -0.5
+            result["detail"] = f"SPX{result['spx_chg']:+.2f}% DXY{result['dxy_chg']:+.2f}% UVIX{result['us_vix']}"
+        else:
+            result["bias"] = "NEUTRAL"
+            result["score_mod"] = 0.0
+            result["detail"] = f"SPX{result['spx_chg']:+.2f}% DXY{result['dxy_chg']:+.2f}% UVIX{result['us_vix']}"
+
+        _global_bias_cache = {"data": result, "fetched_at": datetime.now()}
+        return result
+
+    except Exception as e:
+        print(f"[GLOBAL BIAS] Fetch failed: {e}")
+        return {"bias": "NEUTRAL", "score_mod": 0.0, "spx_chg": 0.0,
+                "dxy_chg": 0.0, "us_vix": 20.0, "detail": "fetch_error"}
 
 
 def get_vix_adjusted_params(vix: float) -> dict:

@@ -5,11 +5,11 @@ from datetime import datetime, time as dtime
 
 # REGIME MAPPING
 REGIME_STRATEGY_MAP = {
-    "STRONG_TREND_UP":   ["ORB_LONG"],
-    "WEAK_TREND_UP":     ["ORB_LONG"],
+    "STRONG_TREND_UP":   ["ORB_LONG", "EMA_PULLBACK_LONG"],
+    "WEAK_TREND_UP":     ["ORB_LONG", "EMA_PULLBACK_LONG", "REVERSAL_LONG"],
     "RANGE":             ["REVERSAL_LONG", "REVERSAL_SHORT"],
-    "WEAK_TREND_DOWN":   ["ORB_SHORT"],
-    "STRONG_TREND_DOWN": ["ORB_SHORT"],
+    "WEAK_TREND_DOWN":   ["ORB_SHORT", "EMA_PULLBACK_SHORT", "REVERSAL_SHORT"],
+    "STRONG_TREND_DOWN": ["ORB_SHORT", "EMA_PULLBACK_SHORT"],
 }
 
 REGIME_SIZE_MULTIPLIER = {
@@ -211,10 +211,10 @@ def pcr_direction_ok(pcr: float, strategy_type: str) -> bool:
     """
     if pcr is None: return True
     if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
-        if pcr < 0.75: return False   
+        if pcr < 0.55: return False    # only block on extreme bearish options positioning
     elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
-        if pcr > 1.25: return False   
-    return True   
+        if pcr > 1.50: return False    # only block on extreme bullish options positioning
+    return True
 
 
 # ═══════════════════════════════════════════════════════════
@@ -386,12 +386,17 @@ class MarketRegime:
         regime = "RANGE"
         confidence = 50
 
-        if adx_val > rc["strong_trend_adx"] and vwap_dist_pct > rc["vwap_strong_dist_pct"] and bw > rc["bb_strong_bw"]:
+        # Strong trend: ADX alone is enough — don't require BB expansion (it lags)
+        if adx_val > rc["strong_trend_adx"] and vwap_dist_pct > rc["vwap_strong_dist_pct"]:
             regime = "STRONG_TREND_UP"
-            confidence = min(40 + int(adx_val) + int(bw * 10), 100)
-        elif adx_val > rc["strong_trend_adx"] and vwap_dist_pct < -rc["vwap_strong_dist_pct"] and bw > rc["bb_strong_bw"]:
+            confidence = min(40 + int(adx_val) + int(bw * 5), 100)
+        elif adx_val > rc["strong_trend_adx"] and vwap_dist_pct < -rc["vwap_strong_dist_pct"]:
             regime = "STRONG_TREND_DOWN"
-            confidence = min(40 + int(adx_val) + int(bw * 10), 100)
+            confidence = min(40 + int(adx_val) + int(bw * 5), 100)
+        # Strong ADX but price near VWAP — still trending, use VWAP side to classify
+        elif adx_val > rc["strong_trend_adx"]:
+            regime = "STRONG_TREND_UP" if vwap_dist_pct >= 0 else "STRONG_TREND_DOWN"
+            confidence = min(35 + int(adx_val), 90)
         elif rc["weak_trend_adx_min"] <= adx_val <= rc["weak_trend_adx_max"] and vwap_dist_pct > 0:
             regime = "WEAK_TREND_UP"
             confidence = min(30 + int(adx_val), 80)
@@ -446,7 +451,7 @@ class OpeningRangeBreakout:
     def evaluate(self, current_price: float, vol_ratio: Optional[float]) -> Dict[str, Any]:
         if not self.captured or self.orb_high is None:
             return {"orb_signal": "NONE", "orb_high": None, "orb_low": None}
-        has_volume = vol_ratio is not None and vol_ratio >= 2.0  
+        has_volume = vol_ratio is not None and vol_ratio >= 1.5
         if current_price > self.orb_high and has_volume:
             return {"orb_signal": "BUY_BREAKOUT", "orb_high": self.orb_high, "orb_low": self.orb_low}
         elif current_price < self.orb_low and has_volume:
@@ -590,7 +595,6 @@ class TradeScorer:
         vol_r     = data["volume_ratio"]
         adx_val   = data["adx"]
         st_data   = data["supertrend"]
-        macd_div  = data["macd_div"]
         boll      = data["bollinger"]
         pivots    = data.get("pivots", {})
         ema9_s    = data["ema9_series"]
@@ -604,6 +608,14 @@ class TradeScorer:
         vpoc_data       = data.get("vpoc", {})
         ofi_data        = data.get("ofi", {})
         fii_data        = data.get("fii_dii", {})
+
+        # V5.3 new data fields
+        stoch_rsi   = data.get("stoch_rsi", {})
+        cmf_val     = data.get("cmf", 0.0)
+        ichimoku    = data.get("ichimoku", {})
+        williams_r  = data.get("williams_r", None)
+        global_bias = data.get("global_bias", {"bias": "NEUTRAL", "score_mod": 0.0})
+        roc_val     = data.get("roc", None)
 
         # ── V5.1 Core Criteria ──
 
@@ -657,12 +669,22 @@ class TradeScorer:
             reasons.append(f"ST {st_sc}")
             breakdown.append(f"st:+{st_sc}")
 
-        # MACD Divergence
-        macd_sc = score_macd(macd_div, strategy_type)
-        if macd_sc > 0:
-            score += macd_sc
-            reasons.append(f"MACD Div")
-            breakdown.append(f"macd:+{macd_sc}")
+        # ROC — replaces MACD as momentum filter (less lag on 1m charts)
+        if roc_val is not None:
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                if roc_val > 0.4:
+                    score += 1.0; reasons.append(f"ROC+{roc_val:.2f}"); breakdown.append("roc:+1.0")
+                elif roc_val > 0.1:
+                    score += 0.5; reasons.append(f"ROC+{roc_val:.2f}"); breakdown.append("roc:+0.5")
+                elif roc_val < -0.3:
+                    score -= 0.5; breakdown.append("roc:-0.5")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                if roc_val < -0.4:
+                    score += 1.0; reasons.append(f"ROC{roc_val:.2f}"); breakdown.append("roc:+1.0")
+                elif roc_val < -0.1:
+                    score += 0.5; reasons.append(f"ROC{roc_val:.2f}"); breakdown.append("roc:+0.5")
+                elif roc_val > 0.3:
+                    score -= 0.5; breakdown.append("roc:-0.5")
 
         # Bollinger Bands
         bb_sc = score_bollinger(closes_s, boll["upper"], boll["lower"], boll["bandwidth"], strategy_type)
@@ -681,7 +703,7 @@ class TradeScorer:
             breakdown.append(f"adx:+{val}")
 
         # ORB Bonus
-        orb_sc = 0.5 if (orb_signal != "NONE" and vol_r >= 2.0 and 
+        orb_sc = 0.5 if (orb_signal != "NONE" and vol_r >= 1.5 and
                         ((strategy_type == "ORB_LONG" and orb_signal == "BUY_BREAKOUT") or 
                          (strategy_type == "ORB_SHORT" and orb_signal == "SELL_BREAKOUT"))) else 0.0
         if orb_sc > 0:
@@ -720,6 +742,78 @@ class TradeScorer:
             reasons.append(f"OFI")
             breakdown.append(f"ofi:{'+' if ofi_sc>0 else ''}{ofi_sc}")
 
+        # ── V5.3 New Indicator Scores ──
+
+        # Stochastic RSI (max +1.0)
+        # Oversold %K crossing above %D = bullish; overbought crossing below = bearish
+        if stoch_rsi and stoch_rsi.get("k") is not None:
+            k = stoch_rsi["k"]
+            k_above_d = stoch_rsi.get("k_above_d")
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                if stoch_rsi.get("oversold") and k_above_d:
+                    score += 1.0; reasons.append("StochRSI OB↑"); breakdown.append("srsi:+1.0")
+                elif k < 50 and k_above_d:
+                    score += 0.5; reasons.append("StochRSI↑"); breakdown.append("srsi:+0.5")
+                elif stoch_rsi.get("overbought"):
+                    score -= 0.5; breakdown.append("srsi:-0.5")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                if stoch_rsi.get("overbought") and not k_above_d:
+                    score += 1.0; reasons.append("StochRSI OS↓"); breakdown.append("srsi:+1.0")
+                elif k > 50 and not k_above_d:
+                    score += 0.5; reasons.append("StochRSI↓"); breakdown.append("srsi:+0.5")
+                elif stoch_rsi.get("oversold"):
+                    score -= 0.5; breakdown.append("srsi:-0.5")
+
+        # Chaikin Money Flow (max +1.0)
+        # CMF > +0.1 = sustained buying pressure; < -0.1 = sustained selling
+        if cmf_val is not None:
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                if cmf_val > 0.2:
+                    score += 1.0; reasons.append(f"CMF+{cmf_val:.2f}"); breakdown.append("cmf:+1.0")
+                elif cmf_val > 0.1:
+                    score += 0.5; reasons.append(f"CMF+{cmf_val:.2f}"); breakdown.append("cmf:+0.5")
+                elif cmf_val < -0.1:
+                    score -= 0.5; breakdown.append(f"cmf:-0.5")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                if cmf_val < -0.2:
+                    score += 1.0; reasons.append(f"CMF{cmf_val:.2f}"); breakdown.append("cmf:+1.0")
+                elif cmf_val < -0.1:
+                    score += 0.5; reasons.append(f"CMF{cmf_val:.2f}"); breakdown.append("cmf:+0.5")
+                elif cmf_val > 0.1:
+                    score -= 0.5; breakdown.append("cmf:-0.5")
+
+        # Ichimoku Cloud (max +1.0)
+        # Price above cloud + Tenkan > Kijun = strong bullish confluence
+        if ichimoku and ichimoku.get("above_cloud") is not None:
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                if ichimoku.get("above_cloud") and ichimoku.get("tenkan_above_kijun") and ichimoku.get("cloud_bullish"):
+                    score += 1.0; reasons.append("Ichimoku↑↑"); breakdown.append("ichi:+1.0")
+                elif ichimoku.get("above_cloud") and ichimoku.get("tenkan_above_kijun"):
+                    score += 0.5; reasons.append("Ichimoku↑"); breakdown.append("ichi:+0.5")
+                elif ichimoku.get("below_cloud"):
+                    score -= 0.5; breakdown.append("ichi:-0.5")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                if ichimoku.get("below_cloud") and not ichimoku.get("tenkan_above_kijun") and ichimoku.get("cloud_bullish") is False:
+                    score += 1.0; reasons.append("Ichimoku↓↓"); breakdown.append("ichi:+1.0")
+                elif ichimoku.get("below_cloud") and not ichimoku.get("tenkan_above_kijun"):
+                    score += 0.5; reasons.append("Ichimoku↓"); breakdown.append("ichi:+0.5")
+                elif ichimoku.get("above_cloud"):
+                    score -= 0.5; breakdown.append("ichi:-0.5")
+
+        # Williams %R (max +0.5)
+        # Confirms overbought/oversold — used as additional momentum filter
+        if williams_r is not None:
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                if williams_r < -80:   # oversold — good for reversal long
+                    score += 0.5; reasons.append(f"W%R{williams_r:.0f}"); breakdown.append("wr:+0.5")
+                elif williams_r > -20: # overbought — bad for longs
+                    score -= 0.25; breakdown.append("wr:-0.25")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                if williams_r > -20:   # overbought — good for reversal short
+                    score += 0.5; reasons.append(f"W%R{williams_r:.0f}"); breakdown.append("wr:+0.5")
+                elif williams_r < -80: # oversold — bad for shorts
+                    score -= 0.25; breakdown.append("wr:-0.25")
+
         # ── V5.2 Modifiers (push above/below base) ──
 
         # Sector Bonus (±0.5)
@@ -735,6 +829,19 @@ class TradeScorer:
 
         # FII/DII Bias (±0.5)
         score = apply_fii_bias(score, fii_data, strategy_type)
+
+        # Global Market Bias (±0.5) — S&P500, DXY, US VIX overnight direction
+        g_mod = global_bias.get("score_mod", 0.0)
+        g_bias = global_bias.get("bias", "NEUTRAL")
+        if g_mod != 0.0:
+            if strategy_type in ("ORB_LONG", "REVERSAL_LONG"):
+                score += g_mod
+                reasons.append(f"Global:{g_bias}")
+                breakdown.append(f"glbl:{'+' if g_mod>0 else ''}{g_mod}")
+            elif strategy_type in ("ORB_SHORT", "REVERSAL_SHORT"):
+                score -= g_mod   # bearish global = good for shorts
+                reasons.append(f"Global:{g_bias}")
+                breakdown.append(f"glbl:{'+' if -g_mod>0 else ''}{-g_mod}")
 
         return {"score": round(score, 1), "reasons": reasons, "breakdown": "|".join(breakdown)}
 
@@ -765,6 +872,16 @@ class MasterStrategy:
         if now_time > close_time:
             return _result("NO TRADE", 0, pct_from_open, intraday_range, "⏳ Past trading window", "")
 
+        # Data quality gate — reject obviously corrupted candles
+        vol_ratio = data.get("volume_ratio", 1.0)
+        atr_check = data.get("atr")
+        if vol_ratio is not None and vol_ratio > 15.0:
+            return _result("NO TRADE", 0, pct_from_open, intraday_range,
+                           f"BAD_DATA: vol_ratio={vol_ratio}x (capped at 15x)", "")
+        if atr_check is not None and current > 0 and (atr_check / current) > 0.05:
+            return _result("NO TRADE", 0, pct_from_open, intraday_range,
+                           f"BAD_DATA: ATR={atr_check} is >5% of price (data anomaly)", "")
+
         # PCR Filter pre-check
         pcr = data.get("pcr", 1.0)
         if allowed and not pcr_direction_ok(pcr, allowed[0]):
@@ -794,7 +911,7 @@ class MasterStrategy:
                            f"🔒 {liquidity['trap_type']}", "")
 
         adx_val = data.get("adx")
-        if adx_val is not None and adx_val < 15:
+        if adx_val is not None and adx_val < 12:
             return _result("NO TRADE", 0, pct_from_open, intraday_range,
                            f"Choppy (ADX={adx_val})", "")
 
@@ -855,6 +972,62 @@ class MasterStrategy:
                     sl, tgt = _dynamic_sl_tgt(entry, "SELL", atr_val, rm)
                     reasons = " | ".join(sell["reasons"])
                     breakdown = sell["breakdown"]
+
+        # ── EMA9 Pullback trades (trend continuation) ──
+        if signal == "NO TRADE":
+            ema9_series  = data.get("ema9_series")
+            ema21_series = data.get("ema21_series")
+            if ema9_series is not None and len(ema9_series) >= 1 and ema21_series is not None and len(ema21_series) >= 1:
+                ema9_val  = float(ema9_series.iloc[-1])
+                ema21_val = float(ema21_series.iloc[-1])
+                pullback_thr   = cfg["scoring"].get("ema9_pullback_pct", 0.5) / 100
+                dist_from_ema9 = (current - ema9_val) / ema9_val
+
+                if "EMA_PULLBACK_LONG" in allowed and ema9_val > ema21_val and 0 <= dist_from_ema9 <= pullback_thr:
+                    pull = TradeScorer.score_trade(data, pct_from_open, "ORB_LONG", orb_sig, cfg)
+                    if pull["score"] >= min_score:
+                        signal = "BUY"; score = pull["score"]; entry = current
+                        sl, tgt = _dynamic_sl_tgt(entry, "BUY", atr_val, rm)
+                        reasons = "EMA9 Pullback | " + " | ".join(pull["reasons"])
+                        breakdown = "ema9pull|" + pull["breakdown"]
+
+                if signal == "NO TRADE" and "EMA_PULLBACK_SHORT" in allowed and ema9_val < ema21_val and -pullback_thr <= dist_from_ema9 <= 0:
+                    pull = TradeScorer.score_trade(data, pct_from_open, "ORB_SHORT", orb_sig, cfg)
+                    if pull["score"] >= min_score:
+                        signal = "SELL"; score = pull["score"]; entry = current
+                        sl, tgt = _dynamic_sl_tgt(entry, "SELL", atr_val, rm)
+                        reasons = "EMA9 Pullback | " + " | ".join(pull["reasons"])
+                        breakdown = "ema9pull|" + pull["breakdown"]
+
+        # ── VWAP Bounce trades (most reliable intraday setup) ──
+        # Price touches VWAP from the trend side then reclaims it with volume = institutional re-entry
+        if signal == "NO TRADE" and not is_early:
+            vwap_val  = data.get("vwap", 0)
+            vol_ratio = data.get("volume_ratio", 0)
+            if vwap_val and vwap_val > 0:
+                vwap_bounce_dist = cfg["scoring"].get("vwap_bounce_dist_pct", 0.25) / 100
+                dist_from_vwap   = (current - vwap_val) / vwap_val  # signed
+
+                # VWAP Bounce LONG: price is just above VWAP (within 0.25%), vol elevated, trending up
+                if (0 <= dist_from_vwap <= vwap_bounce_dist and vol_ratio >= 1.3
+                        and regime in ("STRONG_TREND_UP", "WEAK_TREND_UP")):
+                    bounce = TradeScorer.score_trade(data, pct_from_open, "ORB_LONG", orb_sig, cfg)
+                    if bounce["score"] >= min_score:
+                        signal = "BUY"; score = bounce["score"]; entry = current
+                        sl, tgt = _dynamic_sl_tgt(entry, "BUY", atr_val, rm)
+                        reasons = "VWAP Bounce | " + " | ".join(bounce["reasons"])
+                        breakdown = "vwapbounce|" + bounce["breakdown"]
+
+                # VWAP Bounce SHORT: price is just below VWAP, vol elevated, trending down
+                if (signal == "NO TRADE" and -vwap_bounce_dist <= dist_from_vwap <= 0
+                        and vol_ratio >= 1.3
+                        and regime in ("STRONG_TREND_DOWN", "WEAK_TREND_DOWN")):
+                    bounce = TradeScorer.score_trade(data, pct_from_open, "ORB_SHORT", orb_sig, cfg)
+                    if bounce["score"] >= min_score:
+                        signal = "SELL"; score = bounce["score"]; entry = current
+                        sl, tgt = _dynamic_sl_tgt(entry, "SELL", atr_val, rm)
+                        reasons = "VWAP Bounce | " + " | ".join(bounce["reasons"])
+                        breakdown = "vwapbounce|" + bounce["breakdown"]
 
         grade = "A+" if score >= cfg["scoring"]["grade_a_plus"] else ("A" if score >= cfg["scoring"]["grade_a"] else "-")
         stars = f"{'★' * min(int(score), 14)}{'☆' * max(14 - int(score), 0)}  {score}/14" if score > 0 else "—"
