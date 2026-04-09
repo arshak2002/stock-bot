@@ -22,16 +22,16 @@ session:
 # ── Scoring ──
 scoring:
   # Time-of-day adaptive thresholds
-  min_score_orb_window: 6        # 9:30–10:00 AM
-  min_score_morning: 6           # 10:00–12:00
-  min_score_afternoon: 6         # 12:00–3:15
+  min_score_orb_window: 5        # 9:30–10:00 AM
+  min_score_morning: 5           # 10:00–12:00
+  min_score_afternoon: 5         # 12:00–3:15
   grade_a_plus: 9
   grade_a: 7
   
-  min_score: 6             # lowered: 6/11 = balanced quality vs frequency
-  move_threshold_pct: 0.5  # 0.5% move from open triggers reversal/ORB scoring
+  min_score: 5             # lowered: 5/14 = more trade opportunities
+  move_threshold_pct: 0.3  # 0.3% move from open triggers reversal/ORB scoring (was 0.5)
   ema9_pullback_pct: 0.5   # widened: within 0.5% of EMA9 qualifies as pullback (was 0.3)
-  vwap_bounce_dist_pct: 0.25  # within 0.25% of VWAP triggers bounce strategy
+  vwap_bounce_dist_pct: 0.5   # widened: within 0.5% of VWAP triggers bounce strategy (was 0.25)
   vwap_proximity_pct: 1.5        # widened: within 1.5% of VWAP counts
   cpr_proximity_pct: 0.75        # was 0.3 — this was the main culprit
   rsi_oversold: 45         # relaxed RSI bands

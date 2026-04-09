@@ -882,15 +882,21 @@ class MasterStrategy:
             return _result("NO TRADE", 0, pct_from_open, intraday_range,
                            f"BAD_DATA: ATR={atr_check} is >5% of price (data anomaly)", "")
 
-        # PCR Filter pre-check
+        # PCR Filter: selectively block LONG or SHORT strategies, not everything
         pcr = data.get("pcr", 1.0)
-        if allowed and not pcr_direction_ok(pcr, allowed[0]):
-            return _result("NO TRADE", 0, pct_from_open, intraday_range, f"PCR_BLOCK={pcr}", "")
+        long_strategies  = {"ORB_LONG", "EMA_PULLBACK_LONG", "REVERSAL_LONG"}
+        short_strategies = {"ORB_SHORT", "EMA_PULLBACK_SHORT", "REVERSAL_SHORT"}
+        if pcr < 0.55:   # extremely bullish PCR → block short setups only
+            allowed = [s for s in allowed if s not in short_strategies]
+        elif pcr > 1.50: # extremely bearish PCR → block long setups only
+            allowed = [s for s in allowed if s not in long_strategies]
+        if not allowed:
+            return _result("NO TRADE", 0, pct_from_open, intraday_range, f"PCR_BLOCK_ALL={pcr}", "")
 
-        # V5.2: Gap alignment filter
+        # V5.2: Gap alignment filter — only block if NO allowed strategy is gap-aligned
         gap_data = data.get("gap_classification", {})
         if allowed and gap_data:
-            if not is_strategy_gap_aligned(allowed[0], gap_data):
+            if not any(is_strategy_gap_aligned(s, gap_data) for s in allowed):
                 return _result("NO TRADE", 0, pct_from_open, intraday_range,
                                f"GAP_BLOCK={gap_data.get('gap_type','?')}", "")
 
@@ -1008,8 +1014,8 @@ class MasterStrategy:
                 vwap_bounce_dist = cfg["scoring"].get("vwap_bounce_dist_pct", 0.25) / 100
                 dist_from_vwap   = (current - vwap_val) / vwap_val  # signed
 
-                # VWAP Bounce LONG: price is just above VWAP (within 0.25%), vol elevated, trending up
-                if (0 <= dist_from_vwap <= vwap_bounce_dist and vol_ratio >= 1.3
+                # VWAP Bounce LONG: price is just above VWAP, vol elevated, trending up
+                if (0 <= dist_from_vwap <= vwap_bounce_dist and vol_ratio >= 1.1
                         and regime in ("STRONG_TREND_UP", "WEAK_TREND_UP")):
                     bounce = TradeScorer.score_trade(data, pct_from_open, "ORB_LONG", orb_sig, cfg)
                     if bounce["score"] >= min_score:
@@ -1020,7 +1026,7 @@ class MasterStrategy:
 
                 # VWAP Bounce SHORT: price is just below VWAP, vol elevated, trending down
                 if (signal == "NO TRADE" and -vwap_bounce_dist <= dist_from_vwap <= 0
-                        and vol_ratio >= 1.3
+                        and vol_ratio >= 1.1
                         and regime in ("STRONG_TREND_DOWN", "WEAK_TREND_DOWN")):
                     bounce = TradeScorer.score_trade(data, pct_from_open, "ORB_SHORT", orb_sig, cfg)
                     if bounce["score"] >= min_score:
