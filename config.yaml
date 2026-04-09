@@ -74,8 +74,8 @@ risk_management:
   sl_atr_multiplier: 1.2
   target_atr_multiplier: 2.0
   fixed_target_pct: 1.0        # Force 1.0% profit target per trade
-  true_edge_min_pct: 0.10        # was 0.25 — too strict for large-caps
-  true_edge_min_midcap: 0.15     # new: separate threshold for mid-caps
+  true_edge_min_pct: 0.03        # large-cap edge threshold (after slippage)
+  true_edge_min_midcap: 0.05     # mid-cap edge threshold (after slippage)
   trailing_breakeven_pct: 0.5
   trailing_lock_1_pct: 0.75
   trailing_lock_2_pct: 1.0
@@ -93,9 +93,9 @@ loss_streak:
 # ── Slippage Model ──
 slippage:
   large_cap_pct: 0.05      # Nifty50
-  mid_cap_pct: 0.15
-  small_cap_pct: 0.30
-  min_true_edge_pct: 0.25  # signal must exceed this after costs
+  mid_cap_pct: 0.10        # was 0.15 — too punishing, blocks most mid-caps
+  small_cap_pct: 0.25
+  min_true_edge_pct: 0.05  # signal must exceed this after costs
 
 # ── Market Regime ──
 regime:

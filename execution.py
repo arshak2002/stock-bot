@@ -353,7 +353,8 @@ class SlippageModel:
     @staticmethod
     def get_slippage_pct(symbol: str, cfg: Dict) -> float:
         sl = cfg["slippage"]
-        if symbol.upper() in NIFTY50:
+        clean = symbol.replace(".NS", "").replace(".BO", "").upper()
+        if clean in NIFTY50:
             return sl["large_cap_pct"]
         # Simple heuristic: if not in Nifty50, assume mid-cap
         return sl["mid_cap_pct"]
@@ -392,7 +393,8 @@ class SlippageModel:
     @staticmethod
     def get_true_edge_threshold(symbol: str, cfg: Dict) -> float:
         rm = cfg["risk_management"]
-        if symbol.upper() in NIFTY50:
+        clean = symbol.replace(".NS", "").replace(".BO", "").upper()
+        if clean in NIFTY50:
             return rm["true_edge_min_pct"]
         return rm.get("true_edge_min_midcap", 0.15)
 

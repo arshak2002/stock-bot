@@ -237,6 +237,7 @@ class IntradayBot:
                     # ── 1. Fetch ──
                     data = self.providers[sym].fetch(cfg)
                     if data is None:
+                        print(f"  [{datetime.now().strftime('%H:%M:%S')}] {sym}: ⚠️  data fetch failed — skipping")
                         continue
 
                     df_1m = data.pop("df_1m", None)
