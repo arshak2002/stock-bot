@@ -1,0 +1,36 @@
+name: Stock Bot Daily Run
+
+on:
+  schedule:
+    - cron: '45 3 * * 1-5'  # 9:15 AM IST = 3:45 AM UTC, Mon–Fri
+  workflow_dispatch:          # adds a manual Run button on GitHub
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 375     # covers full session 9:15 AM – 3:30 PM IST
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install yfinance pandas numpy requests schedule \
+                      pyyaml tabulate flask feedparser
+
+      - name: Inject Telegram secrets into config
+        run: |
+          sed -i "s|bot_token:.*|bot_token: \"${{ secrets.TELEGRAM_BOT_TOKEN }}\"|" config.yaml
+          sed -i "s|chat_id:.*|chat_id: \"${{ secrets.TELEGRAM_CHAT_ID }}\"|" config.yaml
+
+      - name: Run Stock Bot
+        run: python bot.py
+        env:
+          TZ: Asia/Kolkata
+
