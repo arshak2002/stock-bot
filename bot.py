@@ -64,9 +64,8 @@ class IntradayBot:
 
         self.trade_count = {"BUY": 0, "SELL": 0}
         self.active_tranches = {}   # V5.2: symbol -> TrancheManager
-        self.signaled_today = set() # symbols that already got an entry signal today
+        self.signaled_today = set() # one trade per stock per day — never cleared mid-session
         self._signal_date = datetime.now().strftime("%Y-%m-%d")
-        self._last_trade_time = {}  # symbol -> datetime of last trade close (cooldown)
         
         # Schedule morning brief
         schedule.every().day.at("09:14").do(self.send_morning_brief)
@@ -275,21 +274,13 @@ class IntradayBot:
 
                             CorrelationGuard.remove_position(sym)
                             del self.active_tranches[sym]
-                            self._last_trade_time[sym] = datetime.now()
-                            # Keep in signaled_today — re-entry only allowed after 15-min cooldown
+                            # signaled_today is NOT cleared — one trade per stock per day, period
                         else:
                             continue  # trade still open — skip signal pipeline entirely
 
-                    # Skip if already traded this symbol today (or within 15-min cooldown)
+                    # One trade per stock per day — hard block
                     if sym in self.signaled_today:
-                        last = self._last_trade_time.get(sym)
-                        if last is None:
-                            continue  # trade still open — no cooldown yet
-                        elapsed = (datetime.now() - last).seconds / 60
-                        if elapsed < 15:
-                            continue  # within 15-min cooldown after trade close
-                        else:
-                            self.signaled_today.discard(sym)  # cooldown expired, allow re-entry
+                        continue
 
                     # ── 3. ORB ──
                     self.orbs[sym].capture_range(df_1m)

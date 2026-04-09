@@ -921,6 +921,22 @@ class MasterStrategy:
             return _result("NO TRADE", 0, pct_from_open, intraday_range,
                            f"Choppy (ADX={adx_val})", "")
 
+        # Supertrend alignment filter — both 1m and 5m must agree with trade direction
+        # Only applied in trend regimes (not RANGE)
+        st = data.get("supertrend", {})
+        if st and regime != "RANGE":
+            st_1m = st.get("dir_1min")
+            st_5m = st.get("dir_5min")
+            long_regimes  = ("STRONG_TREND_UP", "WEAK_TREND_UP")
+            short_regimes = ("STRONG_TREND_DOWN", "WEAK_TREND_DOWN")
+            if regime in long_regimes and st_1m == "DOWN" and st_5m == "DOWN":
+                allowed = [s for s in allowed if "LONG" not in s]
+            elif regime in short_regimes and st_1m == "UP" and st_5m == "UP":
+                allowed = [s for s in allowed if "SHORT" not in s]
+            if not allowed:
+                return _result("NO TRADE", 0, pct_from_open, intraday_range,
+                               f"ST_CONFLICT: regime={regime} but ST={st_1m}/{st_5m}", "")
+
         min_score = get_min_score(now_time, cfg["scoring"])
         orb_sig = orb_result["orb_signal"]
 

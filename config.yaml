@@ -16,20 +16,20 @@ session:
   safe_open: "09:20"
   safe_close: "15:15"
   no_reversal_before: "09:35"
-  max_trades_per_day: 12   # total, not per side
+  max_trades_per_day: 6    # one per stock, max 6 stocks per day
   poll_interval_sec: 5
 
 # ── Scoring ──
 scoring:
   # Time-of-day adaptive thresholds
-  min_score_orb_window: 5        # 9:30–10:00 AM
-  min_score_morning: 5           # 10:00–12:00
-  min_score_afternoon: 5         # 12:00–3:15
+  min_score_orb_window: 7        # 9:30–10:00 AM — only A grade or better
+  min_score_morning: 7           # 10:00–12:00
+  min_score_afternoon: 6         # 12:00–3:15 — slightly relaxed afternoon
   grade_a_plus: 9
   grade_a: 7
-  
-  min_score: 5             # lowered: 5/14 = more trade opportunities
-  move_threshold_pct: 0.3  # 0.3% move from open triggers reversal/ORB scoring (was 0.5)
+
+  min_score: 7             # only A/A+ grade trades fire
+  move_threshold_pct: 0.4  # 0.4% move from open required for reversal
   ema9_pullback_pct: 0.5   # widened: within 0.5% of EMA9 qualifies as pullback (was 0.3)
   vwap_bounce_dist_pct: 0.5   # widened: within 0.5% of VWAP triggers bounce strategy (was 0.25)
   vwap_proximity_pct: 1.5        # widened: within 1.5% of VWAP counts
