@@ -639,16 +639,18 @@ class TradeLogger:
         self._log_row(data, result, extras)
 
     def log_fill(self, symbol: str, fill: Dict, avg_entry: float, status: str):
-        """Logs an individual tranche fill."""
-        row = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            symbol, fill["price"], f"FILL_{fill['id']}", "", "",
-            "", "", "", "", "", "", "", "", "", "", "",
-            fill["qty"], "", avg_entry, fill["sl"], fill["target"], 
-            f"Tranche Fill | {status}", "", "", fill["id"], status
-        ]
-        with open(self.filepath, "a", newline="") as f:
-            csv.writer(f).writerow(row)
+        """Log tranche fills to a separate file — not the main trade log."""
+        fill_log = self.filepath.replace("trade_log.csv", "tranche_fills.csv")
+        write_header = not os.path.exists(fill_log)
+        with open(fill_log, "a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(["timestamp", "symbol", "tranche_id", "price", "qty", "avg_entry", "sl", "target", "status"])
+            w.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                symbol, fill["id"], fill["price"], fill["qty"],
+                avg_entry, fill["sl"], fill["target"], status,
+            ])
 
     def _log_row(self, data: Dict, result: Dict, extras: Dict):
         if result["signal"] == "NO TRADE":
