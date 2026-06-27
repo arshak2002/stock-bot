@@ -18,3 +18,5 @@ FEATURES.md
 __pycache__/
 .cache/
 .pytest_cache/
+# Local secrets — keep real token here locally; never committed
+config.yaml
