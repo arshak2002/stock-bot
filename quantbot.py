@@ -568,6 +568,13 @@ def run_live(cfg: dict):
 def main():
     cfg = CONFIG
     mode = sys.argv[1] if len(sys.argv) > 1 else "backtest"
+    if mode == "test":
+        token, chat = _telegram_creds()
+        print(f"credentials found: {'yes' if (token and chat) else 'NO'}")
+        _telegram(f"✅ Test message from quantbot via GitHub Actions at "
+                  f"{datetime.now(IST):%Y-%m-%d %H:%M:%S} IST — secrets & network OK.")
+        print("done.")
+        return
     if mode == "live":
         run_live(cfg); return
     if mode == "signal":

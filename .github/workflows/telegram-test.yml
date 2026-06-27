@@ -1,0 +1,26 @@
+name: Telegram Test (manual)
+
+# Manually send a test message to Telegram to confirm the GitHub Secrets and
+# network path work on the runner. Run it from: Actions -> "Telegram Test" ->
+# Run workflow. No schedule -> costs nothing unless you click it.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy pyyaml
+      - name: Send Telegram test message
+        run: python quantbot.py test
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
