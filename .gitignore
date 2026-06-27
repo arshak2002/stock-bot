@@ -16,3 +16,5 @@ FEATURES.md
 *.csv
 *.json
 __pycache__/
+.cache/
+.pytest_cache/
