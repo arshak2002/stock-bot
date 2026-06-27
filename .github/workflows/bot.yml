@@ -12,6 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Log schedule delay (scheduled 10:30 UTC / 16:00 IST)
+        run: |
+          echo "Scheduled : 10:30 UTC  (16:00 IST)"
+          echo "Actual UTC: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "Actual IST: $(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S')"
+          sched=$(date -u -d '10:30' +%s); now=$(date -u +%s)
+          echo "Delay vs scheduled: $(( (now - sched) / 60 )) minutes"
+          echo "(manual runs will show a large/negative number — that's expected)"
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6

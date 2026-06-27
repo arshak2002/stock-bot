@@ -1,0 +1,33 @@
+name: Cron Delay Test (TEMPORARY — delete after a day)
+
+# Purpose: measure how late GitHub's scheduled runs actually start.
+# It fires every 30 min (slots :00 and :30). Each run prints how many
+# seconds past its scheduled slot it ACTUALLY began = the scheduling lag.
+# Look at Actions -> "Cron Delay Test" run history to see the distribution.
+#
+# ⚠️ Each run bills ~1 min (GitHub rounds up). Delete this file after 1-2 days
+#    so it doesn't eat your free minutes:  git rm .github/workflows/cron-delay-test.yml
+
+on:
+  schedule:
+    - cron: '0,30 * * * *'   # every 30 minutes, on :00 and :30
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Measure delay from scheduled slot
+        run: |
+          MIN=$((10#$(date -u +%M)))
+          SEC=$((10#$(date -u +%S)))
+          # nearest scheduled slot is :00 or :30 -> minutes past slot:
+          PAST_MIN=$(( MIN % 30 ))
+          DELAY=$(( PAST_MIN * 60 + SEC ))
+          echo "Now UTC : $(date -u '+%H:%M:%S')   (IST $(TZ=Asia/Kolkata date '+%H:%M:%S'))"
+          echo "Scheduled slot was :00 or :30"
+          echo ">>> Scheduling delay: ${DELAY}s  (${PAST_MIN}m $((DELAY%60))s) <<<"
+          if [ "$DELAY" -lt 120 ]; then echo "verdict: on time"; \
+          elif [ "$DELAY" -lt 600 ]; then echo "verdict: minor delay"; \
+          else echo "verdict: significant delay"; fi
